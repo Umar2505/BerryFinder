@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/Config/">
+    <File Path="ikon-config.toml" />
+  </Folder>
+  <Folder Name="/App/">
+    <Project Path="app/Berryfinder/Berryfinder.csproj" />
+  </Folder>
+  <Folder Name="/Frontend/">
+    <Project Path="frontend-node/Berryfinder.Frontend.Node.csproj" />
+  </Folder>
+</Solution>
