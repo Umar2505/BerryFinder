@@ -1,0 +1,41 @@
+.berry-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 240px;
+}
+
+.berry-map .maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
+
+.berry-rank-marker {
+  width: 30px;
+  height: 30px;
+  border-radius: 9999px;
+  border: 2px solid #f5f1e6;
+  background: #1d3b2a;
+  color: #f5f1e6;
+  font: 600 13px/1 Inter, system-ui, sans-serif;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(10, 25, 15, 0.35);
+  cursor: pointer;
+  transition: transform 120ms ease-out;
+}
+
+.berry-rank-marker:hover,
+.berry-rank-marker.is-selected {
+  transform: scale(1.18);
+  background: #6b2d6b;
+}
+
+.berry-user-marker {
+  width: 18px;
+  height: 18px;
+  border-radius: 9999px;
+  background: #2563eb;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.25);
+}

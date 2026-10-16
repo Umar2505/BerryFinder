@@ -1,0 +1,21 @@
+# Local development services. The BerryFinder app itself runs with `ikon run`; this provides the PostGIS
+# database it needs (the platform's built-in Postgres has no PostGIS). See docs/deployment.md.
+services:
+  postgis:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: berryfinder-postgis
+    environment:
+      POSTGRES_USER: berryfinder
+      POSTGRES_PASSWORD: ${BERRYFINDER_DB_PASSWORD:-berryfinder-dev-only}
+      POSTGRES_DB: berryfinder
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - postgis-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U berryfinder -d berryfinder"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  postgis-data:

@@ -3,6 +3,7 @@ import './app.css';
 import { AuthProvider, IkonApp, getConnectionRecovery, useAuthOptional, useIkonApp } from '@ikonai/sdk-react-ui';
 import { registerStandardUiModule, registerLucideIconsModule } from '@ikonai/sdk-react-ui-standard';
 import { AuthGuard } from './auth/auth-guard';
+import { registerBerryMapModule } from './lib/berry-map/berry-map-module';
 import { authConfig } from './env';
 import { I18nProvider, useI18n } from './i18n/i18n';
 import { en } from './i18n/en';
@@ -21,7 +22,7 @@ function App() {
 
 function AuthorizedApp() {
   const app = useIkonApp({
-    modules: [registerStandardUiModule, registerLucideIconsModule],
+    modules: [registerStandardUiModule, registerLucideIconsModule, registerBerryMapModule],
   });
 
   return (

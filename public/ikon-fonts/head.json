@@ -1,0 +1,21 @@
+[
+  {
+    "tag": "link",
+    "attrs": {
+      "rel": "preload",
+      "as": "font",
+      "type": "font/woff2",
+      "href": "/ikon-fonts/files/6NUu8FyLNQOQZAnv9bYEvDiIdE9Ea92uemAk_WBq8U_9v0c2Wa0K7iN7hzFUPJH58nib14c7qv8.woff2",
+      "crossorigin": ""
+    },
+    "injectTo": "head"
+  },
+  {
+    "tag": "link",
+    "attrs": {
+      "rel": "stylesheet",
+      "href": "/ikon-fonts/fonts.css"
+    },
+    "injectTo": "head"
+  }
+]

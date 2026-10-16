@@ -17,6 +17,7 @@
     <IsIkonInternal Condition="'$(IkonRoot)' != ''">true</IsIkonInternal>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.89" />
     <PackageReference Include="Ikon.Agent" Version="3.16.2" Condition="'$(IsIkonInternal)' != 'true'" />
     <PackageReference Include="Ikon.Agent.Docs" Version="3.16.2" Condition="'$(IsIkonInternal)' != 'true'" />
     <PackageReference Include="Ikon.AI" Version="3.16.2" Condition="'$(IsIkonInternal)' != 'true'" />

@@ -17,6 +17,7 @@
     "@ikonai/sdk-react-ui-standard": "^1.13.2",
     "@ikonai/sdk-ui": "^1.13.2",
     "@simplewebauthn/browser": "14.0.0",
+    "maplibre-gl": "5.6.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

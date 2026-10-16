@@ -1,0 +1,51 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Unit, NIST reference and parser tests
+        run: dotnet test tests/Berryfinder.Tests --configuration Release
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-node
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend-node/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npm run lint
+  spatial:
+    # Geospatial query tests against a real PostGIS: applies the migrations to an empty database
+    runs-on: ubuntu-latest
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: berryfinder
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Spatial tests
+        env:
+          BERRYFINDER_TEST_DB: Host=127.0.0.1;Port=5433;Username=postgres;Password=ci;Database=berryfinder
+        run: dotnet test tests/Berryfinder.Tests --configuration Release --filter "Category=Spatial"

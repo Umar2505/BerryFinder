@@ -1,0 +1,5 @@
+# SYNTHETIC EXAMPLE ROWS: for testing import tooling only. Not real observations. Do not load into production.
+species,latitude,longitude,survey_date,method,outcome,stage,effort_minutes,area_searched_m2,plots_counted,ripe_berries_total,unripe_berries_total,amount_litres,observer_id,share_aggregated,use_for_training,notes
+bilberry,64.9850,25.6200,2027-07-28,plot_1m2,few,ripe,25,5,5,18,4,,SYNTHETIC-01,false,true,example row
+bilberry,64.9900,25.6400,2027-07-28,plot_1m2,none,,20,5,5,0,0,,SYNTHETIC-01,false,true,example surveyed absence
+lingonberry,64.9700,25.5800,2027-09-05,visit,moderate,ripe,60,,,,,2.5,SYNTHETIC-02,true,true,example row

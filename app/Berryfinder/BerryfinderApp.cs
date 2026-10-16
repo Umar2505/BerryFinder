@@ -1,303 +1,413 @@
+using System.Data.Common;
+using System.Globalization;
+using Dapper;
+using Npgsql;
+
 return await App.Run(args);
 
-// Which clients share an app instance: one per user. Leave it empty to share one instance.
-public record SessionIdentity(string? UserId);
+// One shared instance serves everyone (up to 200 clients); per-person state lives in Client/User reactives and the database
+public record SessionIdentity();
 
-// Per-client data, mapped from URL query params (`?name=Alice` -> `Name`).
-public record ClientParameters(string Name);
+// ?lang=fi or ?lang=en picks the language; ?species=lingonberry opens the map on that berry
+public record ClientParameters(string Name = "", string? Lang = null, string? Species = null);
 
-public record Picture(byte[] Data, string MimeType, string Name = "image");
-
-public record ChatMessage(bool FromUser, string Text, IReadOnlyList<Picture> Pictures);
-
-// What went wrong, and the message Try again resends when there is one
-public record Problem(string Message, ChatMessage? Retry = null);
-
+// Visual direction: a calm, premium Nordic outdoor-navigation product. Forest-green brand on soft cream,
+// dark pine in dark mode, Fraunces headings over Inter, generous radius, a berry-purple accent used sparingly.
 [App]
 public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
 {
     private UI UI { get; } = new(app, new IkonTheme
     {
-        ["background"] = "#f3f1ec",
-        ["foreground"] = "#151412",
-        ["card"] = "#ffffff",
-        ["muted-foreground"] = "#5f5b54",
-        ["border"] = "#e4e0d8",
-        ["primary"] = "#ff2a8c",
-        ["font-heading"] = "Anton",
-        ["radius"] = "rounded-2xl",
+        ["primary"] = "#2f5d3a",
+        ["primary-foreground"] = "#f7f3e8",
+        ["background"] = "#f3efe4",
+        ["foreground"] = "#16261c",
+        ["card"] = "#fffdf7",
+        ["muted"] = "#ebe5d6",
+        ["muted-foreground"] = "#56655a",
+        ["border"] = "#e0d9c8",
+        ["input"] = "#d3cbb7",
+        ["accent-500"] = "#7b2e7d",
+        ["accent-600"] = "#5e215f",
+        ["font-heading"] = "Fraunces",
+        ["font-body"] = "Inter",
+        ["radius"] = "rounded-xl",
+        ["density"] = "comfortable",
+        ["motion-duration-base"] = "180ms",
+        ["ease-default"] = "ease-out",
 
         DarkMode = new IkonTheme
         {
-            ["background"] = "#151412",
-            ["foreground"] = "#f3f1ec",
-            ["card"] = "#1d1c1a",
-            ["muted-foreground"] = "#a8a39a",
-            ["border"] = "#2a2926",
+            ["primary"] = "#8cc49a",
+            ["primary-foreground"] = "#0e1a12",
+            ["background"] = "#0e1712",
+            ["foreground"] = "#ebe6d8",
+            ["card"] = "#15231a",
+            ["muted"] = "#1c2d22",
+            ["muted-foreground"] = "#9fb0a2",
+            ["border"] = "#253a2c",
+            ["input"] = "#2f4636",
         },
     });
 
-    private Audio Audio { get; } = new(app);
+    private ClientProfiles Profiles { get; } = new(app);
 
-    // The model caps an image at 5 MB after base64 encoding, which grows it by a third
-    private const long MaxImageBytes = 3_500_000;
+    // Services, built in Main; plain fields come back empty after a hot reload, so Main rebuilds them
+    private PredictionPublisher _publisher = null!;
+    private TrainingService _trainer = null!;
+    private JobRunner _jobs = null!;
+    private Queries _queries = null!;
+    private ObservationService _observations = null!;
+    private string _tileUrl = "";
+    private string? _satelliteUrl;
+    private string _coverageGeoJson = """{"type":"FeatureCollection","features":[]}""";
 
-    // The image types the model reads; others (HEIC, SVG) would fail on every retry
-    private static readonly string[] ImageTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+    // Shared: bumped when predictions are republished so every map reloads its tiles
+    private readonly Reactive<int> _dataVersion = new(0);
+    private readonly Reactive<int> _jobsVersion = new(0);
+    private readonly Reactive<bool> _dbReady = new(false);
+    private readonly Reactive<string?> _startupProblem = new(null);
 
-    // Message blocks, not exchanges: images ride along in every turn, so the history stays short
-    private const int ContextBlocks = 20;
-
-    private static readonly string[] Suggestions = ["Draw a lighthouse at dusk", "What can you help me with?"];
-
-    private readonly UserReactive<string> _draft = new("");
-    private readonly UserReactiveList<Picture> _attached = new();
-    private readonly UserReactiveList<ChatMessage> _messages = new();
-    private readonly UserReactive<KernelContext> _context = new(new KernelContext());
-    private readonly UserReactive<bool> _busy = new(false);
-    private readonly UserReactive<Problem?> _problem = new(null);
+    // Per client
+    private readonly ClientReactive<string> _language = new("en");
+    private readonly ClientReactive<string> _path = new("/");
+    private readonly ClientReactive<bool> _isAdmin = new(false);
+    private readonly ClientReactive<bool> _isSignedIn = new(false);
+    private readonly ClientReactive<string?> _toast = new(null);
 
     public async Task Main()
     {
-        // Short push-to-talk clips leave Whisper guessing the language; Scribe identifies it better
-        Audio.UseSpeechRecognition(SpeechRecognizerModel.ElevenScribe2);
-        Audio.SpeechRecognizedAsync += async args => await OnSpeechAsync(args.Text);
-        Audio.SpeechNotRecognizedAsync += async args => ShowProblem(args.Reason == SpeechNotRecognizedReason.NoSignal
-            ? "No sound from your mic. Check which mic your device uses."
-            : "Didn't catch that. Try again.");
+        _dbUrl = Environment.GetEnvironmentVariable("BERRYFINDER_DB") ?? (app.Secrets.TryGet("POSTGIS_URL", out var url) ? url : null);
+        OpenDb openDb = OpenDbAsync;
+
+        _publisher = new PredictionPublisher(openDb, path => app.Files.Data.ReadTextAsync(path));
+        _trainer = new TrainingService(openDb, (path, json) => app.Files.Data.WriteTextAsync(path, json), async id =>
+        {
+            await _publisher.RefreshProductionAsync();
+            await _jobs.EnqueueAsync(JobKinds.Publish, new { reason = "promotion", model = id }, "system");
+        });
+        _jobs = new JobRunner(openDb, async (duration, reason) => await app.BackgroundWork.StartAsync(duration, reason), _publisher, _trainer);
+        _queries = new Queries(openDb, _publisher);
+        _observations = new ObservationService(openDb);
+        _admin = new AdminQueries(openDb);
+        _satelliteUrl = app.Secrets.TryGet("NLS_API_KEY", out var nlsKey) && !string.IsNullOrWhiteSpace(nlsKey)
+            ? $"https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/ortokuva/default/WGS84_Pseudo-Mercator/{{z}}/{{y}}/{{x}}.jpg?api-key={nlsKey}"
+            : null;
+
+        _jobs.Changed += () =>
+        {
+            _jobsVersion.Value++;
+            _ = RefreshJobListAsync();
+        };
+        _publisher.Published += () => _dataVersion.Value++;
+
+        app.OnStarting(async () =>
+        {
+            if (SnapshotCapture.IsCaptureProcess)
+            {
+                return;
+            }
+
+            try
+            {
+                await using var db = await openDb();
+                var applied = await Migrations.ApplyAsync(db);
+                await Registry.EnsureAsync(db);
+                foreach (var species in Species.Supported)
+                {
+                    await _publisher.EnsureBaselineAsync(species);
+                }
+
+                await _publisher.RefreshProductionAsync();
+                _coverageGeoJson = await db.ExecuteScalarAsync<string>("""
+                    SELECT json_build_object('type', 'FeatureCollection', 'features', json_build_array(json_build_object('type', 'Feature', 'properties', json_build_object(),
+                        'geometry', ST_AsGeoJSON(ST_Transform(ST_Union(geom), 4326), 5)::json)))::text FROM pilot_tiles WHERE enabled
+                    """) ?? _coverageGeoJson;
+
+                // First start with an empty database: ingest the pilot region from the official sources
+                if (await db.ExecuteScalarAsync<long>("SELECT count(*) FROM forest_stands") == 0
+                    && await db.ExecuteScalarAsync<long>("SELECT count(*) FROM ingestion_jobs") == 0)
+                {
+                    await _jobs.EnqueueAsync(JobKinds.Pipeline, new { onlyMissing = true }, "system:first-start");
+                }
+
+                Log.Instance.Info($"Database ready ({applied} migrations applied)");
+                _dbReady.Value = true;
+            }
+            catch (Exception ex)
+            {
+                Log.Instance.Error($"Database start failed: {ex}");
+                _startupProblem.Value = ex.Message.Contains("postgis", StringComparison.OrdinalIgnoreCase)
+                    ? "The map database has no PostGIS. Set the POSTGIS_URL secret (see docs/deployment.md)."
+                    : "The map data store is not reachable right now.";
+                return;
+            }
+
+            try
+            {
+                await DeclareOffersAsync();
+            }
+            catch (Exception ex)
+            {
+                Log.Instance.Warning($"Payment offers could not be declared (billing not configured?): {ex.Message}");
+            }
+
+            try
+            {
+                // A local run and the deployed app each mint their own tile URL; {z}/{x}/{y} and {species} stay open for the map
+                _tileUrl = (await app.MintUrlAsync(nameof(GetTile))).Url;
+            }
+            catch (Exception ex)
+            {
+                Log.Instance.Warning($"Tile URL could not be minted, falling back to the public address: {ex.Message}");
+                _tileUrl = app.Endpoints.FirstOrDefault(e => e.FunctionName.EndsWith(nameof(GetTile)))?.PublicUrl ?? "";
+            }
+
+            _ = Task.Run(() => _jobs.RunLoopAsync(app.StoppingToken));
+        });
+
+        app.OnClientJoined(async (ctx, parameters) =>
+        {
+            _language.Value = SupportedLanguage(parameters.Lang) ?? SupportedLanguage(ctx.Locale) ?? "en";
+            _path.Value = NormalisePath(app.Navigation.CurrentPath);
+
+            if (parameters.Species is { } sp && Species.Supported.Contains(sp))
+            {
+                _species.Value = sp;
+            }
+
+            _isSignedIn.Value = !ctx.IsAnonymous && !string.IsNullOrEmpty(ctx.UserId);
+
+            if (_dbReady.Value && !string.IsNullOrEmpty(ctx.UserId))
+            {
+                await using (var db = await OpenDbAsync())
+                {
+                    await Queries.EnsureUserAsync(db, ctx.UserId);
+                }
+
+                _isAdmin.Value = !ctx.IsAnonymous && await IsAdminAsync(ctx.UserId, ctx);
+                await LoadAccountAsync(ctx.UserId);
+            }
+        });
+
+        app.Navigation.PathChangedAsync += async args => _path.Value = NormalisePath(args.Path);
 
         UI.Root([Page.Default], content: view =>
         {
-            view.Column(["h-screen w-full bg-background text-foreground"], content: page =>
+            view.Column(["h-screen w-full bg-background text-foreground font-body flex flex-col"], content: page =>
             {
-                page.ChatLog(["h-full w-full max-w-2xl mx-auto px-6 py-8 md:py-12 gap-6"],
-                    autoScrollKey: _messages.Count,
-                    header: RenderHeader,
-                    content: list => list.Column(["gap-6 pb-2"], content: RenderMessages),
-                    footer: RenderInput);
-            });
-        });
-    }
+                RenderTopBar(page);
 
-    private void RenderHeader(UIView view)
-    {
-        // The client list is reactive, so the count re-renders as people join and leave
-        var here = app.ReactiveGlobalState.GetHumanClients().Count();
-
-        view.Column(["shrink-0 gap-4"], content: header =>
-        {
-            header.Row(["justify-end items-center gap-2"], content: row =>
-            {
-                row.Box(["w-2 h-2 rounded-full bg-brand-solid"]);
-                row.Text([Text.Caption, "text-muted-foreground"], text: $"{here} here now");
-            });
-
-            header.Text(["font-heading uppercase leading-[0.9] text-[18vw] sm:text-8xl"], text: "Untitled.");
-        });
-    }
-
-    private void RenderMessages(UIView view)
-    {
-        if (_messages.Count == 0 && !_busy.Value)
-        {
-            view.Row(["flex-wrap gap-2"], content: row =>
-            {
-                foreach (var suggestion in Suggestions)
+                page.Box(["flex-1 min-h-0 flex flex-col"], content: main =>
                 {
-                    row.Button([Button.OutlineMd, "rounded-full"], text: suggestion, onClick: async () => await SendAsync(suggestion, []));
-                }
-            });
-        }
-
-        foreach (var message in _messages)
-        {
-            view.Column([message.FromUser ? "gap-2 items-end" : "gap-2"], content: column =>
-            {
-                foreach (var picture in message.Pictures)
-                {
-                    column.Image([message.FromUser ? "w-32 rounded-2xl" : "w-full max-w-md rounded-2xl"], data: picture.Data, mimeType: picture.MimeType, alt: picture.Name);
-                }
-
-                if (message.FromUser && message.Text.Length > 0)
-                {
-                    column.Text([Text.Body, "text-muted-foreground"], text: message.Text);
-                }
-                else if (!message.FromUser)
-                {
-                    // Models answer in Markdown
-                    column.Markdown(["default", Text.Body, "leading-relaxed"], content: message.Text);
-
-                    column.Button(["self-start -ml-1 -mt-1 p-1 rounded-md bg-transparent border-0 text-muted-foreground opacity-60 hover:opacity-100 pointer-coarse:opacity-100"],
-                        text: "Read aloud",
-                        onClick: async () => await ReadAloudAsync(message.Text),
-                        content: icon => icon.Icon([Icon.Sm], name: "volume-2"));
-                }
-            });
-        }
-
-        if (_busy.Value)
-        {
-            view.Spinner();
-        }
-    }
-
-    private void RenderInput(UIView view)
-    {
-        view.Column(["shrink-0 gap-3"], content: input =>
-        {
-            if (_problem.Value is { } problem)
-            {
-                input.Alert(problem.Message, tone: SemanticTone.Error, onDismiss: async () => _problem.Value = null, content: alert =>
-                {
-                    if (problem.Retry is { } retry)
+                    if (_startupProblem.Value is { } problem)
                     {
-                        alert.Button([Button.OutlineMd, "mt-3 self-start"], text: "Try again", onClick: async () => await SendAsync(retry.Text, retry.Pictures));
+                        main.Box([Layout.Page, "py-10"], content: b => b.Alert(T("Service unavailable", "Palvelu ei ole käytettävissä"), tone: SemanticTone.Error,
+                            description: T(problem, "Karttatietovarastoon ei saada yhteyttä juuri nyt.")));
+                        return;
+                    }
+
+                    switch (_path.Value)
+                    {
+                        case "/map": RenderMapPage(main); break;
+                        case "/plan": RenderPlanPage(main); break;
+                        case "/field": RenderFieldPage(main); break;
+                        case "/saved": RenderSavedPage(main); break;
+                        case "/account": RenderAccountPage(main); break;
+                        case "/admin": RenderAdminPage(main); break;
+                        case "/pricing": RenderPricingPage(main); break;
+                        case "/methodology": RenderMethodologyPage(main); break;
+                        case "/berries": RenderBerriesPage(main); break;
+                        case "/faq": RenderFaqPage(main); break;
+                        case "/responsible": RenderResponsiblePage(main); break;
+                        case "/contact": RenderContactPage(main); break;
+                        default: RenderHomePage(main); break;
                     }
                 });
+
+                if (IsAppPath(_path.Value))
+                {
+                    RenderBottomNav(page);
+                }
+            });
+
+            if (_toast.Value is { } toast)
+            {
+                view.Toast(open: true, durationMs: 3500, title: toast, onOpenChange: async open => { if (!open) _toast.Value = null; });
             }
-
-            input.Composer(
-                style: ["default", "rounded-3xl bg-card border-0 pl-3"],
-                fieldStyle: ["default", "text-base"],
-                value: _draft.Value,
-                placeholder: "Ask anything, ask for a picture, or drop one in…",
-                busy: _busy.Value,
-                attachments: [.. _attached.Select(p => new ComposerAttachment(p.Name, p.MimeType, p.Data.Length))],
-                accept: ImageTypes,
-                onValueChange: async text => _draft.Value = text,
-                onSubmit: async text =>
-                {
-                    if (_busy.Value)
-                    {
-                        return;
-                    }
-
-                    var pictures = _attached.ToList();
-                    _draft.Value = "";
-                    _attached.Clear();
-                    await SendAsync(text, pictures);
-                },
-                onAttachmentAdded: async args =>
-                {
-                    if (args.LocalTempFilePath is not { } path)
-                    {
-                        return;
-                    }
-
-                    try
-                    {
-                        // Checked here rather than with maxFileSize, which skips a file without telling anyone
-                        if (args.Size <= MaxImageBytes)
-                        {
-                            _attached.Add(new Picture(await File.ReadAllBytesAsync(path), args.MimeType, args.FileName));
-                        }
-                        else
-                        {
-                            ShowProblem($"{args.FileName} is too large. Images up to 3.5 MB work.");
-                        }
-                    }
-                    finally
-                    {
-                        File.Delete(path);
-                    }
-                },
-                onAttachmentRemoved: async index => _attached.RemoveAt(index),
-                onAttachmentError: async args => ShowProblem($"Couldn't attach {args.FileName}, try again"),
-                // The mic only renders when both capture callbacks are wired; transcripts arrive through Audio.SpeechRecognizedAsync
-                onCaptureStart: async _ => { },
-                onCaptureStop: async _ => { });
         });
     }
 
-    private async Task OnSpeechAsync(string transcript)
-    {
-        // Never drop what was said: while a reply runs, or when something is already typed, it joins the draft
-        if (_busy.Value || _draft.Value.Length > 0 || _attached.Count > 0)
-        {
-            _draft.Value = $"{_draft.Value} {transcript}".Trim();
-            return;
-        }
+    // ─── Language ─────────────────────────────────────────────────────────
 
-        await SendAsync(transcript, []);
+    private static readonly SelectOption[] Languages = [new("en", "English"), new("fi", "Suomi")];
+
+    private static string? SupportedLanguage(string? tag) =>
+        string.IsNullOrEmpty(tag) ? null : Languages.Select(l => l.Value).FirstOrDefault(l => tag.StartsWith(l, StringComparison.OrdinalIgnoreCase));
+
+    // English text is the key; Finnish is written beside it. More languages plug in through data/i18n/<lang>.json keyed by the English text.
+    private string T(string en, string fi) => _language.Value == "fi" ? fi : en;
+
+    private CultureInfo Culture => CultureInfo.GetCultureInfo(_language.Value == "fi" ? "fi-FI" : "en-GB");
+
+    private string SpeciesName(string species) => species switch
+    {
+        Species.Bilberry => T("Bilberry", "Mustikka"),
+        Species.Lingonberry => T("Lingonberry", "Puolukka"),
+        Species.Cloudberry => T("Cloudberry", "Hilla"),
+        _ => species,
+    };
+
+    // ─── Navigation ───────────────────────────────────────────────────────
+
+    private static readonly string[] AppPaths = ["/map", "/plan", "/field", "/saved", "/account"];
+
+    private static bool IsAppPath(string path) => AppPaths.Contains(path);
+
+    private static string NormalisePath(string? path)
+    {
+        var p = (path ?? "/").Split('?', '#')[0].TrimEnd('/');
+        return p.Length == 0 ? "/" : p.ToLowerInvariant();
     }
 
-    // Keeps a pending retry: a failed message lives only there, so a later problem must not drop it
-    private void ShowProblem(string message) => _problem.Value = new Problem(message, _problem.Value?.Retry);
-
-    private async Task ReadAloudAsync(string text)
+    private async Task GoAsync(string path)
     {
-        int clientId = ReactiveScope.ClientId;
-
-        // Plays only to the client that asked, not to everyone connected
-        var line = Audio.Speak(MediaTargets.To([clientId]), text);
-
-        if (await line.Completion == AudioPlaybackOutcome.Failed)
-        {
-            // The reply stays on screen to read, so a failed playback only needs saying
-            Log.Instance.Warning($"Read aloud failed for client {clientId}: {line.Error?.Message}");
-            ShowProblem("Couldn't play that");
-        }
+        _path.Value = path;
+        await app.Navigation.SetPathAsync(path);
     }
 
-    private async Task SendAsync(string text, IReadOnlyList<Picture> pictures)
+    private void RenderTopBar(UIView view)
     {
-        if (_busy.Value || (string.IsNullOrWhiteSpace(text) && pictures.Count == 0))
+        var inApp = IsAppPath(_path.Value) || _path.Value == "/admin";
+
+        view.Row(["shrink-0 h-14 px-4 md:px-6 items-center justify-between gap-3 border-b border-secondary bg-card/80 backdrop-blur"], content: bar =>
         {
-            return;
-        }
+            bar.Button(["flex items-center gap-2 bg-transparent border-0 p-0 cursor-pointer"], ariaLabel: "BerryFinder", onClick: async () => await GoAsync("/"), content: logo =>
+            {
+                logo.Box(["w-8 h-8 rounded-full bg-brand-solid flex items-center justify-center"], content: b =>
+                    b.Icon([Icon.Sm, "text-[var(--text-brand-button)]"], name: "trees"));
+                logo.Text(["font-heading text-lg font-semibold tracking-tight text-foreground"], text: "BerryFinder");
+                logo.Text(["hidden sm:inline text-[10px] uppercase tracking-widest text-accent-600 font-semibold mt-1"], text: T("Oulu pilot", "Oulun pilotti"));
+            });
 
-        using var busy = _busy.AsToken();
-        var question = new ChatMessage(true, text.Trim(), pictures);
-        _messages.Add(question);
-        _problem.Value = null;
+            bar.Row(["hidden md:flex items-center gap-1"], content: links =>
+            {
+                foreach (var (path, en, fi) in new[] { ("/map", "Map", "Kartta"), ("/methodology", "How it works", "Miten se toimii"), ("/berries", "Berries", "Marjat"), ("/pricing", "Pricing", "Hinnat"), ("/faq", "FAQ", "UKK") })
+                {
+                    var active = _path.Value == path;
+                    links.Button([Button.GhostSm, active ? "text-brand-secondary font-semibold" : "text-muted-foreground"], text: T(en, fi), onClick: async () => await GoAsync(path));
+                }
 
-        IMessagePart[] parts = [.. pictures.Select(p => (IMessagePart)new ImagePart(p.Data, p.MimeType))];
+                if (_isAdmin.Value)
+                {
+                    links.Button([Button.GhostSm, _path.Value == "/admin" ? "text-brand-secondary font-semibold" : "text-muted-foreground"], text: "Admin", onClick: async () => await GoAsync("/admin"));
+                }
+            });
 
-        if (question.Text.Length > 0)
+            bar.Row(["items-center gap-2"], content: right =>
+            {
+                right.Select(["w-24"], options: Languages, value: _language.Value, ariaLabel: T("Language", "Kieli"), onValueChange: async language => _language.Value = language);
+
+                if (!inApp)
+                {
+                    right.Button([Button.PrimarySm], text: T("Open map", "Avaa kartta"), onClick: async () => await GoAsync("/map"));
+                }
+                else if (!_isSignedIn.Value)
+                {
+                    right.Button([Button.OutlineSm], text: T("Sign in", "Kirjaudu"), onClick: async () => await ClientFunctions.LoginShowAsync(T("Sign in to save areas and send field reports", "Kirjaudu tallentaaksesi alueita ja lähettääksesi havaintoja")));
+                }
+                else
+                {
+                    right.Button([Button.GhostSm, "hidden md:flex"], text: T("Account", "Tili"), onClick: async () => await GoAsync("/account"));
+                }
+            });
+        });
+    }
+
+    private void RenderBottomNav(UIView view)
+    {
+        view.Row(["shrink-0 h-16 border-t border-secondary bg-card grid grid-cols-5 md:hidden"], content: nav =>
         {
-            parts = [new TextPart(question.Text), .. parts];
-        }
+            foreach (var (path, icon, en, fi) in new[]
+            {
+                ("/map", "map", "Map", "Kartta"), ("/plan", "route", "Plan", "Suunnittele"), ("/field", "footprints", "Field", "Maastossa"),
+                ("/saved", "bookmark", "Saved", "Tallennetut"), ("/account", "user-round", "Account", "Tili"),
+            })
+            {
+                var active = _path.Value == path;
+                nav.Button(["flex flex-col items-center justify-center gap-1 bg-transparent border-0 min-h-[48px]", active ? "text-brand-secondary" : "text-muted-foreground"],
+                    ariaLabel: T(en, fi), onClick: async () => await GoAsync(path), content: b =>
+                    {
+                        b.Icon([Icon.Md], name: icon);
+                        b.Text(["text-[11px] font-medium"], text: T(en, fi));
+                    });
+            }
+        });
+    }
 
-        var drawn = new List<Picture>();
+    // Shared page frame for the content pages: a max-width column that scrolls inside the viewport
+    private void RenderScrollPage(UIView view, Action<UIView> content)
+    {
+        view.ScrollArea(["flex-1 min-h-0"], content: scroll =>
+            scroll.Column([Layout.Page, "py-8 md:py-12 gap-10 max-w-5xl"], content: content));
+    }
 
+    // ─── Ownership and roles ──────────────────────────────────────────────
+
+    // Admin rights live in user_accounts.role (the source of truth for this app). The platform's own Admin role also counts,
+    // and the first signed-in person to open a fresh app claims ownership through a one-row table, which makes the claim race-free.
+    private async Task<bool> IsAdminAsync(string userId, Context? ctx)
+    {
         try
         {
-            var (reply, updated) = await Emerge.Run<string>(LLMModel.Claude45Haiku, _context.Value.Add(new MessageBlock(MessageBlockRole.User, parts)), pass =>
+            if (ctx is not null && await Profiles.GetProfileAsync(ctx) is { } profile && profile.HasRole(UserRole.Admin))
             {
-                pass.SystemPrompt = "You are a friendly assistant. Answer briefly in Markdown. When the user wants a picture, call generate_image.";
-                pass.AddTool(Tool.Of("generate_image", "Generate an image and show it to the user",
-                    async ([Description("A detailed description of the image")] string description) =>
-                    {
-                        try
-                        {
-                            var image = await ImageGenerator.GenerateAsync(description);
-                            drawn.Add(new Picture(await image.GetDataAsync(), image.MimeType, description));
-                            return "The image is now shown to the user";
-                        }
-                        catch (AIException e)
-                        {
-                            // The model hears a plain failure and tells the user, never the provider's error text
-                            Log.Instance.Warning($"Image generation failed for client {ReactiveScope.ClientIdOrNull}: {e.Message}");
-                            return "Image generation failed. Tell the user briefly and suggest trying again";
-                        }
-                    }));
-            }).FinalAsync();
-
-            if (string.IsNullOrWhiteSpace(reply) && drawn.Count == 0)
-            {
-                throw new InvalidOperationException("The model returned no reply");
+                return true;
             }
-
-            _context.Value = updated.TrimToLastMessages(ContextBlocks);
-            _messages.Add(new ChatMessage(false, reply ?? "", drawn));
         }
-        catch (Exception e)
+        catch (Exception ex)
         {
-            // Keep the message so Try again resends it as it was
-            Log.Instance.Warning($"Reply failed for client {ReactiveScope.ClientIdOrNull}: {e.GetType().Name}: {e.Message}");
-            // Busy guarantees nothing was added after the question
-            _messages.RemoveAt(_messages.Count - 1);
-            _problem.Value = new Problem("Couldn't answer that", question);
+            Log.Instance.Warning($"Platform role lookup failed: {ex.Message}");
         }
+
+        await using var db = await OpenDbAsync();
+        if (await db.ExecuteScalarAsync<string>("SELECT role FROM user_accounts WHERE user_id = @userId", new { userId }) == "admin")
+        {
+            return true;
+        }
+
+        if (await db.ExecuteAsync("INSERT INTO app_owner (id, user_id) VALUES (1, @userId) ON CONFLICT (id) DO NOTHING", new { userId }) != 1)
+        {
+            return false;
+        }
+
+        await db.ExecuteAsync("UPDATE user_accounts SET role = 'admin' WHERE user_id = @userId", new { userId });
+        await Audit.WriteAsync(db, userId, "owner.claimed", $"user:{userId}", new { });
+        return true;
+    }
+
+    // The app's spatial database needs PostGIS. The platform's built-in Postgres does not ship it, so the app
+    // connects to a PostGIS server given by the POSTGIS_URL secret (or BERRYFINDER_DB for local development, see
+    // docker-compose.yml). Without either it falls back to the platform database and reports what is missing.
+    private string? _dbUrl;
+
+    private async Task<DbConnection> OpenDbAsync()
+    {
+        DbConnection connection = _dbUrl is null ? await app.DatabaseAsync() : new NpgsqlConnection(_dbUrl);
+        await connection.OpenAsync();
+        return connection;
+    }
+
+    private string? CurrentUserId => ReactiveScope.UserIdOrNull is { Length: > 0 } id ? id : null;
+
+    private async Task<bool> RequireAdminAsync()
+    {
+        if (!_isAdmin.Value)
+        {
+            _toast.Value = T("Only admins can do that", "Vain ylläpitäjät voivat tehdä tämän");
+            return false;
+        }
+
+        return true;
     }
 }
