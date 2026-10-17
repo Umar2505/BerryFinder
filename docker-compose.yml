@@ -1,5 +1,5 @@
-# Local development services. The BerryFinder app itself runs with `ikon run`; this provides the PostGIS
-# database it needs (the platform's built-in Postgres has no PostGIS). See docs/deployment.md.
+# Local development services. The BerryFinder app itself runs with `ikon run`; this provides the PostGIS database it needs
+# (the platform's built-in Postgres has no PostGIS) and the inference service that runs the trained model. See handbook/deployment.md.
 services:
   postgis:
     image: postgis/postgis:16-3.4-alpine
@@ -17,5 +17,17 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+  inference:
+    build:
+      context: .
+      dockerfile: inference/Dockerfile
+    container_name: berryfinder-inference
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - inference-cache:/var/cache/berryfinder
+    environment:
+      BERRY_USER_AGENT: ${BERRY_USER_AGENT:-BerryFinder/1.0 (+https://github.com/Umar2505/BerryFinder)}
 volumes:
   postgis-data:
+  inference-cache:

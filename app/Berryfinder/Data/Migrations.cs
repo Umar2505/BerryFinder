@@ -451,6 +451,27 @@ public static class Migrations
             );
             CREATE INDEX IF NOT EXISTS weather_grid_daily_day_idx ON weather_grid_daily (day);
             """),
+        new(3, "model_grid", """
+            -- Scores from the Nordic PyTorch habitat model (notebooks/), computed offline on a regular grid and imported
+            -- here. One row per grid cell and model run; scores and habitat are per species and per feature.
+            CREATE TABLE IF NOT EXISTS model_grid_cells (
+                run_version   text NOT NULL,
+                cell_x        integer NOT NULL,       -- cell centre, EPSG:3067 metres
+                cell_y        integer NOT NULL,
+                step_m        real NOT NULL,
+                ood           boolean NOT NULL,       -- conditions unlike anything in the training data
+                scores        jsonb NOT NULL,         -- {species: {idx, p, sd, rule}}
+                habitat       jsonb NOT NULL,         -- raw features the model saw (land cover shares, soil, Finnish stand data)
+                geom          geometry(Polygon, 3067) NOT NULL,
+                centroid      geometry(Point, 4326) NOT NULL,
+                imported_at   timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (run_version, cell_x, cell_y)
+            );
+            CREATE INDEX IF NOT EXISTS model_grid_cells_geom_idx ON model_grid_cells USING gist (geom);
+
+            -- Areas published from the grid have no forest stands behind them; what the model saw is kept with the area
+            ALTER TABLE picking_areas ADD COLUMN IF NOT EXISTS details jsonb;
+            """),
     ];
 
     public static async Task<int> ApplyAsync(DbConnection connection, CancellationToken ct = default)

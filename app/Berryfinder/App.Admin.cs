@@ -365,6 +365,26 @@ public partial class BerryfinderApp
         {
             using var doc = JsonDocument.Parse(m.Metrics);
             var root = doc.RootElement;
+            if (m.Kind == ModelGate.Kind)
+            {
+                string G(string name) => root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble().ToString("0.000", CultureInfo.InvariantCulture) : "n/a";
+                card.Table([], content: t =>
+                {
+                    t.TableHeader(content: h => h.TableRow(content: r => { foreach (var c in new[] { "Held-out blocks", "AUC", "Boyce", "Top-20 % recall" }) r.TableCell(c, [Text.Overline]); }));
+                    t.TableBody(content: tb =>
+                    {
+                        if (root.TryGetProperty("RulesAuc", out var rules) && rules.ValueKind == JsonValueKind.Number)
+                        {
+                            tb.TableRow(content: r => { r.TableCell("Recovers its rule labels"); r.TableCell(G("RulesAuc")); r.TableCell(G("RulesBoyce")); r.TableCell("n/a"); });
+                        }
+
+                        tb.TableRow(content: r => { r.TableCell("Real GBIF sightings vs plant background"); r.TableCell(G("GbifAuc")); r.TableCell(G("GbifBoyce")); r.TableCell(G("GbifRecallTop20")); });
+                    });
+                });
+                card.Text([Text.Caption, "text-muted-foreground"], text: $"PyTorch ensemble of {G("Members").Split('.')[0]} networks, mean validation AUC {G("ValidationAuc")}. Spots need GBIF AUC ≥ {ModelGate.MinGbifAuc:0.00} with a positive Boyce index; presence-only records are biased toward roads and towns, so this is a sanity check, not accuracy.");
+                return;
+            }
+
             if (root.TryGetProperty("Model", out var model) && model.ValueKind == JsonValueKind.Object && root.TryGetProperty("Baseline", out var baseline))
             {
                 string F(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble().ToString("0.000", CultureInfo.InvariantCulture) : "n/a";

@@ -18,18 +18,20 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
 {
     private UI UI { get; } = new(app, new IkonTheme
     {
-        ["primary"] = "#2f5d3a",
-        ["primary-foreground"] = "#f7f3e8",
-        ["background"] = "#f3efe4",
-        ["foreground"] = "#16261c",
-        ["card"] = "#fffdf7",
-        ["muted"] = "#ebe5d6",
-        ["muted-foreground"] = "#56655a",
-        ["border"] = "#e0d9c8",
-        ["input"] = "#d3cbb7",
-        ["accent-500"] = "#7b2e7d",
-        ["accent-600"] = "#5e215f",
-        ["font-heading"] = "Fraunces",
+        // Visual direction: quiet and neutral like an Apple app. Light grey canvas, white cards, near-black text, one forest-green
+        // accent for the single main action on a screen, and colour only where it means something (the berries).
+        ["primary"] = "#1E7B4F",
+        ["primary-foreground"] = "#ffffff",
+        ["background"] = "#f5f5f7",
+        ["foreground"] = "#1d1d1f",
+        ["card"] = "#ffffff",
+        ["muted"] = "#ececf0",
+        ["muted-foreground"] = "#6e6e73",
+        ["border"] = "#e5e5ea",
+        ["input"] = "#d2d2d7",
+        ["accent-500"] = "#5e5ce6",
+        ["accent-600"] = "#4b49c9",
+        ["font-heading"] = "Inter",
         ["font-body"] = "Inter",
         ["radius"] = "rounded-xl",
         ["density"] = "comfortable",
@@ -38,15 +40,15 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
 
         DarkMode = new IkonTheme
         {
-            ["primary"] = "#8cc49a",
-            ["primary-foreground"] = "#0e1a12",
-            ["background"] = "#0e1712",
-            ["foreground"] = "#ebe6d8",
-            ["card"] = "#15231a",
-            ["muted"] = "#1c2d22",
-            ["muted-foreground"] = "#9fb0a2",
-            ["border"] = "#253a2c",
-            ["input"] = "#2f4636",
+            ["primary"] = "#30d158",
+            ["primary-foreground"] = "#04210f",
+            ["background"] = "#000000",
+            ["foreground"] = "#f5f5f7",
+            ["card"] = "#1c1c1e",
+            ["muted"] = "#2c2c2e",
+            ["muted-foreground"] = "#98989d",
+            ["border"] = "#38383a",
+            ["input"] = "#48484a",
         },
     });
 
@@ -56,7 +58,9 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
     private PredictionPublisher _publisher = null!;
     private TrainingService _trainer = null!;
     private JobRunner _jobs = null!;
+    private GridModelImporter _gridModel = null!;
     private Queries _queries = null!;
+    private GuideService _guideSvc = null!;
     private ObservationService _observations = null!;
     private string _tileUrl = "";
     private string? _satelliteUrl;
@@ -86,8 +90,14 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
             await _publisher.RefreshProductionAsync();
             await _jobs.EnqueueAsync(JobKinds.Publish, new { reason = "promotion", model = id }, "system");
         });
-        _jobs = new JobRunner(openDb, async (duration, reason) => await app.BackgroundWork.StartAsync(duration, reason), _publisher, _trainer);
+        _gridModel = new GridModelImporter(openDb, path => app.Files.Data.ReadBytesAsync(path), _publisher);
+        _jobs = new JobRunner(openDb, async (duration, reason) => await app.BackgroundWork.StartAsync(duration, reason), _publisher, _trainer, _gridModel);
         _queries = new Queries(openDb, _publisher);
+        _guideSvc = new GuideService(_queries, _publisher);
+        // The model runs in the inference service (inference/). Locally it listens on 8090; deployed, set the INFERENCE_URL secret.
+        var inferenceUrl = Environment.GetEnvironmentVariable("BERRYFINDER_INFERENCE_URL")
+            ?? (app.Secrets.TryGet("INFERENCE_URL", out var iu) && !string.IsNullOrWhiteSpace(iu) ? iu : "http://127.0.0.1:8090");
+        _inference = new InferenceClient(inferenceUrl);
         _observations = new ObservationService(openDb);
         _admin = new AdminQueries(openDb);
         _satelliteUrl = app.Secrets.TryGet("NLS_API_KEY", out var nlsKey) && !string.IsNullOrWhiteSpace(nlsKey)
@@ -131,6 +141,12 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
                     await _jobs.EnqueueAsync(JobKinds.Pipeline, new { onlyMissing = true }, "system:first-start");
                 }
 
+                // A model card in data/ml that this database has not seen yet: import its grid and publish its spots
+                if (await _gridModel.TryReadCardAsync() is { } card && !await _gridModel.IsImportedAsync(card.Version))
+                {
+                    await _jobs.EnqueueAsync(JobKinds.ModelGrid, new { version = card.Version }, "system:model-card");
+                }
+
                 Log.Instance.Info($"Database ready ({applied} migrations applied)");
                 _dbReady.Value = true;
             }
@@ -163,6 +179,33 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
                 _tileUrl = app.Endpoints.FirstOrDefault(e => e.FunctionName.EndsWith(nameof(GetTile)))?.PublicUrl ?? "";
             }
 
+            try
+            {
+                _analysisUrlTemplate = (await app.MintUrlAsync(nameof(GetAnalysisGeo))).Url;
+            }
+            catch (Exception ex)
+            {
+                Log.Instance.Warning($"Analysis URL could not be minted, falling back to the public address: {ex.Message}");
+                _analysisUrlTemplate = app.Endpoints.FirstOrDefault(e => e.FunctionName.EndsWith(nameof(GetAnalysisGeo)))?.PublicUrl ?? "";
+            }
+
+            // Keep the "Analyze area" button honest about whether the analyser is reachable
+            _ = Task.Run(async () =>
+            {
+                while (!app.StoppingToken.IsCancellationRequested)
+                {
+                    await CheckInferenceAsync();
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(_inferenceOnline.Value ? 60 : 15), app.StoppingToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        return;
+                    }
+                }
+            });
+
             _ = Task.Run(() => _jobs.RunLoopAsync(app.StoppingToken));
         });
 
@@ -171,12 +214,18 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
             _language.Value = SupportedLanguage(parameters.Lang) ?? SupportedLanguage(ctx.Locale) ?? "en";
             _path.Value = NormalisePath(app.Navigation.CurrentPath);
 
-            if (parameters.Species is { } sp && Species.Supported.Contains(sp))
+            if (parameters.Species is { } sp && HasSpots(sp))
             {
                 _species.Value = sp;
             }
 
             _isSignedIn.Value = !ctx.IsAnonymous && !string.IsNullOrEmpty(ctx.UserId);
+            if (!string.IsNullOrEmpty(ctx.Timezone))
+            {
+                _timezone.Value = ctx.Timezone;
+            }
+
+            RestoreHome();
 
             if (_dbReady.Value && !string.IsNullOrEmpty(ctx.UserId))
             {
@@ -218,10 +267,11 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
                         case "/pricing": RenderPricingPage(main); break;
                         case "/methodology": RenderMethodologyPage(main); break;
                         case "/berries": RenderBerriesPage(main); break;
+                        case "/about": RenderHomePage(main); break;
                         case "/faq": RenderFaqPage(main); break;
                         case "/responsible": RenderResponsiblePage(main); break;
                         case "/contact": RenderContactPage(main); break;
-                        default: RenderHomePage(main); break;
+                        default: RenderTodayPage(main); break;
                     }
                 });
 
@@ -230,6 +280,9 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
                     RenderBottomNav(page);
                 }
             });
+
+            RenderBerrySheet(view);
+            RenderProfileSheet(view);
 
             if (_toast.Value is { } toast)
             {
@@ -250,17 +303,17 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
 
     private CultureInfo Culture => CultureInfo.GetCultureInfo(_language.Value == "fi" ? "fi-FI" : "en-GB");
 
-    private string SpeciesName(string species) => species switch
-    {
-        Species.Bilberry => T("Bilberry", "Mustikka"),
-        Species.Lingonberry => T("Lingonberry", "Puolukka"),
-        Species.Cloudberry => T("Cloudberry", "Hilla"),
-        _ => species,
-    };
+    private string SpeciesName(string species) => BerryCatalog.TryGet(species, out var berry) ? berry.Name(_language.Value) : species;
+
+    // A berry has spots when some model for it is in production: the stand baseline, or the grid model where it passed its check
+    private bool HasSpots(string species) => _publisher.Production.ContainsKey(species);
+
+    private IReadOnlyList<string> MappedSpecies => BerryCatalog.All.Select(b => b.Id).Where(HasSpots).ToList();
 
     // ─── Navigation ───────────────────────────────────────────────────────
 
-    private static readonly string[] AppPaths = ["/map", "/plan", "/field", "/saved", "/account"];
+    private static readonly string[] AppPaths = ["/", "/berries", "/map", "/plan", "/field", "/saved", "/account"];
+    private static readonly string[] TabPaths = ["/", "/berries", "/map"];
 
     private static bool IsAppPath(string path) => AppPaths.Contains(path);
 
@@ -276,70 +329,52 @@ public partial class BerryfinderApp(IApp<SessionIdentity, ClientParameters> app)
         await app.Navigation.SetPathAsync(path);
     }
 
+    private static readonly (string Path, string Icon, string En, string Fi)[] Tabs =
+    [
+        ("/", "sun", "Today", "Tänään"),
+        ("/berries", "leaf", "Berries", "Marjat"),
+        ("/map", "map", "Map", "Kartta"),
+    ];
+
+    // Frosted top bar: the wordmark, a segmented control on wide screens, and the avatar that opens everything else
     private void RenderTopBar(UIView view)
     {
-        var inApp = IsAppPath(_path.Value) || _path.Value == "/admin";
-
-        view.Row(["shrink-0 h-14 px-4 md:px-6 items-center justify-between gap-3 border-b border-secondary bg-card/80 backdrop-blur"], content: bar =>
+        view.Row(["shrink-0 h-14 px-5 items-center justify-between gap-3 border-b border-secondary/60 z-20", Design.Frosted], content: bar =>
         {
-            bar.Button(["flex items-center gap-2 bg-transparent border-0 p-0 cursor-pointer"], ariaLabel: "BerryFinder", onClick: async () => await GoAsync("/"), content: logo =>
+            bar.Button(["flex items-center gap-2 bg-transparent border-0 p-0", Design.Press], ariaLabel: "BerryFinder", onClick: async () => await GoAsync("/"), content: logo =>
             {
-                logo.Box(["w-8 h-8 rounded-full bg-brand-solid flex items-center justify-center"], content: b =>
-                    b.Icon([Icon.Sm, "text-[var(--text-brand-button)]"], name: "trees"));
-                logo.Text(["font-heading text-lg font-semibold tracking-tight text-foreground"], text: "BerryFinder");
-                logo.Text(["hidden sm:inline text-[10px] uppercase tracking-widest text-accent-600 font-semibold mt-1"], text: T("Oulu pilot", "Oulun pilotti"));
+                logo.Box(["w-8 h-8 rounded-[10px] bg-brand-solid flex items-center justify-center"], content: b => b.Icon([Icon.Sm, "text-[var(--text-brand-button)]"], name: "leaf"));
+                logo.Text(["text-[17px] font-semibold tracking-tight text-foreground"], text: "BerryFinder");
             });
 
-            bar.Row(["hidden md:flex items-center gap-1"], content: links =>
+            bar.Row(["hidden md:flex items-center gap-1 bg-muted rounded-full p-1"], content: seg =>
             {
-                foreach (var (path, en, fi) in new[] { ("/map", "Map", "Kartta"), ("/methodology", "How it works", "Miten se toimii"), ("/berries", "Berries", "Marjat"), ("/pricing", "Pricing", "Hinnat"), ("/faq", "FAQ", "UKK") })
+                foreach (var (path, _, en, fi) in Tabs)
                 {
                     var active = _path.Value == path;
-                    links.Button([Button.GhostSm, active ? "text-brand-secondary font-semibold" : "text-muted-foreground"], text: T(en, fi), onClick: async () => await GoAsync(path));
-                }
-
-                if (_isAdmin.Value)
-                {
-                    links.Button([Button.GhostSm, _path.Value == "/admin" ? "text-brand-secondary font-semibold" : "text-muted-foreground"], text: "Admin", onClick: async () => await GoAsync("/admin"));
+                    seg.Button(["h-9 px-5 rounded-full border-0 text-[15px] font-medium", Design.Press, active ? "bg-card text-foreground shadow-sm" : "bg-transparent text-muted-foreground"],
+                        text: T(en, fi), onClick: async () => await GoAsync(path));
                 }
             });
 
-            bar.Row(["items-center gap-2"], content: right =>
-            {
-                right.Select(["w-24"], options: Languages, value: _language.Value, ariaLabel: T("Language", "Kieli"), onValueChange: async language => _language.Value = language);
-
-                if (!inApp)
-                {
-                    right.Button([Button.PrimarySm], text: T("Open map", "Avaa kartta"), onClick: async () => await GoAsync("/map"));
-                }
-                else if (!_isSignedIn.Value)
-                {
-                    right.Button([Button.OutlineSm], text: T("Sign in", "Kirjaudu"), onClick: async () => await ClientFunctions.LoginShowAsync(T("Sign in to save areas and send field reports", "Kirjaudu tallentaaksesi alueita ja lähettääksesi havaintoja")));
-                }
-                else
-                {
-                    right.Button([Button.GhostSm, "hidden md:flex"], text: T("Account", "Tili"), onClick: async () => await GoAsync("/account"));
-                }
-            });
+            bar.Button(["w-10 h-10 rounded-full bg-card shadow-sm border-0 flex items-center justify-center", Design.Press], ariaLabel: T("Profile and settings", "Profiili ja asetukset"),
+                onClick: async () => _profileOpen.Value = true, content: b => b.Icon([Icon.Md, "text-foreground"], name: "user-round"));
         });
     }
 
+    // Frosted tab bar with the three things that matter; hidden on wide screens where the top bar has them
     private void RenderBottomNav(UIView view)
     {
-        view.Row(["shrink-0 h-16 border-t border-secondary bg-card grid grid-cols-5 md:hidden"], content: nav =>
+        view.Row(["shrink-0 grid grid-cols-3 border-t border-secondary/60 md:hidden pb-[env(safe-area-inset-bottom)] z-20", Design.Frosted], content: nav =>
         {
-            foreach (var (path, icon, en, fi) in new[]
-            {
-                ("/map", "map", "Map", "Kartta"), ("/plan", "route", "Plan", "Suunnittele"), ("/field", "footprints", "Field", "Maastossa"),
-                ("/saved", "bookmark", "Saved", "Tallennetut"), ("/account", "user-round", "Account", "Tili"),
-            })
+            foreach (var (path, icon, en, fi) in Tabs)
             {
                 var active = _path.Value == path;
-                nav.Button(["flex flex-col items-center justify-center gap-1 bg-transparent border-0 min-h-[48px]", active ? "text-brand-secondary" : "text-muted-foreground"],
+                nav.Button(["flex flex-col items-center justify-center gap-0.5 bg-transparent border-0 h-[58px]", Design.Press, active ? "text-brand-secondary" : "text-muted-foreground"],
                     ariaLabel: T(en, fi), onClick: async () => await GoAsync(path), content: b =>
                     {
                         b.Icon([Icon.Md], name: icon);
-                        b.Text(["text-[11px] font-medium"], text: T(en, fi));
+                        b.Text(["text-[10px] font-medium"], text: T(en, fi));
                     });
             }
         });

@@ -44,12 +44,10 @@ public partial class BerryfinderApp
 
     private void RenderMapPage(UIView view)
     {
-        view.Box(["relative flex-1 min-h-0 flex flex-col md:flex-row"], content: page =>
+        var analysing = _pick.Value is not null;
+        view.Box(["relative flex-1 min-h-0"], content: page =>
         {
-            // Desktop side panel
-            page.Column(["hidden md:flex w-[400px] shrink-0 min-h-0 border-r border-secondary bg-card"], content: panel => RenderMapPanel(panel, mobile: false));
-
-            page.Box(["relative flex-1 min-h-0"], content: mapBox =>
+            page.Box(["absolute inset-0"], content: mapBox =>
             {
                 mapBox.BerryMap(
                     tileUrl: _tileUrl,
@@ -63,12 +61,19 @@ public partial class BerryfinderApp
                     showForest: _showForest.Value,
                     showSoil: _showSoil.Value,
                     selectedAreaId: _selectedAreaId.Value,
-                    rankedAreas: [.. _areas.Take(CurrentPlan.RecommendationLimit).Select((a, i) => new RankedPin(a.Id, a.Lat, a.Lon, i + 1))],
+                    rankedAreas: analysing ? [] : [.. _areas.Take(CurrentPlan.RecommendationLimit).Select((a, i) => new RankedPin(a.Id, a.Lat, a.Lon, i + 1))],
                     userLocation: _userLocation.Value,
                     pickMode: _obsPicking.Value,
                     pickedPoint: _obsPoint.Value,
                     onPick: OnPickedAsync,
                     coverage: _coverageGeoJson,
+                    color: BerryCatalog.TryGet(_species.Value, out var mapBerry) ? mapBerry.Color : null,
+                    analysis: new MapAnalysis(_pick.Value, _radius.Value, AnalysisUrl, _analysisMode.Value, _analysisSpecies.Value,
+                        _analysisSpecies.Value is { } a && BerryCatalog.TryGet(a, out var ab) ? ab.Color : null, _selectedPin.Value,
+                        _job.Value is { Status: "queued" or "running" }, _fitRequest.Value),
+                    locateRequest: _locateRequest.Value,
+                    onMapClick: OnMapClickAsync,
+                    onSelectPin: SelectPinAsync,
                     onViewChange: OnViewChangeAsync,
                     onSelectArea: async id => { if (long.TryParse(id, out var areaId)) await SelectAreaAsync(areaId, fly: false); },
                     onSelectStand: async id => { if (long.TryParse(id, out var standId)) await SelectStandAsync(standId); },
@@ -79,12 +84,17 @@ public partial class BerryfinderApp
                 RenderMapOverlayControls(mapBox);
             });
 
-            // Phone bottom sheet
-            page.Column(["md:hidden shrink-0 bg-card border-t border-secondary rounded-t-3xl shadow-lg flex flex-col min-h-0 -mt-4 relative z-10",
-                _sheetExpanded.Value || _selectedAreaId.Value is not null || _stand.Value is not null ? "h-[58vh]" : "h-[30vh]"], content: sheet =>
+            // Desktop: a floating glass panel; the map stays visible and usable around it
+            page.Column(["hidden md:flex absolute left-4 top-4 bottom-4 w-[400px] z-10 flex-col min-h-0 overflow-hidden rounded-[28px] border border-secondary/60",
+                "bg-card/90 backdrop-blur-xl shadow-[0_12px_40px_rgba(0,0,0,0.14)]"], content: panel => RenderMapPanel(panel, mobile: false));
+
+            // Phone: a bottom sheet over the map, taller while there is something to read
+            page.Column(["md:hidden absolute left-0 right-0 bottom-0 z-10 flex flex-col min-h-0 rounded-t-[28px] border-t border-secondary/60",
+                "bg-card/95 backdrop-blur-xl shadow-[0_-10px_30px_rgba(0,0,0,0.12)] pb-[env(safe-area-inset-bottom)] transition-[height] duration-300 ease-out",
+                _sheetExpanded.Value || _selectedAreaId.Value is not null || _stand.Value is not null ? "h-[70vh]" : _pick.Value is not null ? "h-[46vh]" : "h-[34vh]"], content: sheet =>
             {
-                sheet.Button(["self-center mt-2 mb-1 w-14 h-6 flex items-center justify-center bg-transparent border-0"],
-                    ariaLabel: _sheetExpanded.Value ? T("Collapse list", "Pienennä lista") : T("Expand list", "Suurenna lista"),
+                sheet.Button(["self-center mt-2 mb-1 w-16 h-6 flex items-center justify-center bg-transparent border-0 shrink-0"],
+                    ariaLabel: _sheetExpanded.Value ? T("Collapse panel", "Pienennä paneeli") : T("Expand panel", "Suurenna paneeli"),
                     onClick: async () => _sheetExpanded.Value = !_sheetExpanded.Value,
                     content: h => h.Box(["w-10 h-1.5 rounded-full bg-muted-foreground/40"]));
                 RenderMapPanel(sheet, mobile: true);
@@ -95,10 +105,13 @@ public partial class BerryfinderApp
     private void RenderMapOverlayControls(UIView view)
     {
         // Search and species float over the map on phones; on desktop they live in the side panel
-        view.Column(["absolute top-3 left-3 right-16 md:hidden gap-2 z-10"], content: top =>
+        view.Column(["absolute top-3 left-3 right-16 md:hidden gap-2 z-20"], content: top =>
         {
             RenderSearchBox(top);
-            RenderSpeciesToggle(top, compact: true);
+            if (_pick.Value is null)
+            {
+                RenderSpeciesToggle(top, compact: true);
+            }
         });
 
         view.Column(["absolute bottom-6 md:bottom-4 right-3 gap-2 z-10 items-end"], content: col =>
@@ -142,10 +155,18 @@ public partial class BerryfinderApp
     private void RenderLegend(UIView view)
     {
         view.Text([Text.Label], text: T("Habitat suitability", "Kasvupaikan soveltuvuus"));
-        var colors = _species.Value == Species.Lingonberry
-            ? new[] { "#a3172f", "#d9566c", "#f0b7c0", "#b9b4a8" }
-            : new[] { "#3f2a86", "#7b6cc0", "#c9c1e6", "#b9b4a8" };
-        var labels = new[] { SuitabilityLabel("high"), SuitabilityLabel("moderate"), SuitabilityLabel("low"), SuitabilityLabel("unlikely") };
+        var colors = _species.Value switch
+        {
+            Species.Lingonberry => new[] { "#a3172f", "#d9566c", "#f0b7c0", "#b9b4a8" },
+            Species.Bilberry => new[] { "#3f2a86", "#7b6cc0", "#c9c1e6", "#b9b4a8" },
+            var other => BerryCatalog.TryGet(other, out var b)
+                ? new[] { b.Color, Design.MixWithWhite(b.Color, 0.4), Design.MixWithWhite(b.Color, 0.7), "#b9b4a8" }
+                : new[] { "#3f2a86", "#7b6cc0", "#c9c1e6", "#b9b4a8" },
+        };
+        var gridModel = _publisher.ProductionKinds.GetValueOrDefault(_species.Value) == ModelGate.Kind;
+        var labels = gridModel
+            ? new[] { Guide.OddsLabel(Odds.WorthATry, _language.Value), Guide.OddsLabel(Odds.LongShot, _language.Value) }
+            : new[] { SuitabilityLabel("high"), SuitabilityLabel("moderate"), SuitabilityLabel("low"), SuitabilityLabel("unlikely") };
 
         view.Column(["gap-1.5"], content: legend =>
         {
@@ -159,8 +180,11 @@ public partial class BerryfinderApp
                 });
             }
         });
-        view.Text([Text.Caption, "text-muted-foreground"], text: T("Unvalidated ecological estimate from forest and soil data. Dashed line: pilot coverage.",
-            "Validoimaton ekologinen arvio metsä- ja maaperätiedoista. Katkoviiva: pilottialue."));
+        view.Text([Text.Caption, "text-muted-foreground"], text: gridModel
+            ? T("Machine-learning estimate from climate, soil and satellite land cover on a 250 m grid, checked only against public sightings. Dashed line: pilot coverage.",
+                "Koneoppimisarvio ilmastosta, maaperästä ja satelliittimaanpeitteestä 250 m ruudukossa, tarkistettu vain julkisia havaintoja vasten. Katkoviiva: pilottialue.")
+            : T("Unvalidated ecological estimate from forest and soil data. Dashed line: pilot coverage.",
+                "Validoimaton ekologinen arvio metsä- ja maaperätiedoista. Katkoviiva: pilottialue."));
     }
 
     private void RenderSearchBox(UIView view)
@@ -200,11 +224,12 @@ public partial class BerryfinderApp
 
     private void RenderSpeciesToggle(UIView view, bool compact)
     {
-        view.ToggleGroupSingle([compact ? "grid grid-cols-2 gap-1 bg-card/95 rounded-xl p-1 shadow-md" : "grid grid-cols-2 gap-1 bg-muted rounded-xl p-1"],
+        // Every berry with spots, in a row that scrolls sideways when it does not fit
+        view.ToggleGroupSingle([compact ? "flex gap-1 overflow-x-auto bg-card/95 rounded-xl p-1 shadow-md" : "flex gap-1 overflow-x-auto bg-muted rounded-xl p-1"],
             value: _species.Value, ariaLabel: T("Berry", "Marja"),
             onValueChange: async v =>
             {
-                if (Species.Supported.Contains(v) && v != _species.Value)
+                if (HasSpots(v) && v != _species.Value)
                 {
                     _species.Value = v;
                     _selectedAreaId.Value = null;
@@ -216,12 +241,13 @@ public partial class BerryfinderApp
             },
             content: g =>
             {
-                foreach (var sp in Species.Supported)
+                foreach (var sp in MappedSpecies)
                 {
-                    g.ToggleGroupItem(["h-10 rounded-lg text-sm font-medium data-[state=on]:bg-card data-[state=on]:shadow-sm data-[state=on]:text-foreground text-muted-foreground"], value: sp, content: i =>
-                        i.Row(["items-center gap-2"], content: r =>
+                    var dot = BerryCatalog.TryGet(sp, out var berry) ? berry.Color : "#3f2a86";
+                    g.ToggleGroupItem(["h-10 shrink-0 grow px-3 rounded-lg text-sm font-medium whitespace-nowrap data-[state=on]:bg-card data-[state=on]:shadow-sm data-[state=on]:text-foreground text-muted-foreground"], value: sp, content: i =>
+                        i.Row(["items-center justify-center gap-2"], content: r =>
                         {
-                            r.Box([$"w-2.5 h-2.5 rounded-full {(sp == Species.Lingonberry ? "bg-[#a3172f]" : "bg-[#3f2a86]")}"]);
+                            r.Box([$"w-2.5 h-2.5 rounded-full shrink-0 bg-[{dot}]"]);
                             r.Text(text: SpeciesName(sp));
                         }));
                 }
@@ -234,11 +260,14 @@ public partial class BerryfinderApp
         {
             if (!mobile)
             {
-                panel.Column(["shrink-0 p-4 gap-3 border-b border-secondary"], content: head =>
+                panel.Column(["shrink-0 p-4 gap-3 border-b border-secondary/60"], content: head =>
                 {
                     RenderSearchBox(head);
-                    RenderSpeciesToggle(head, compact: false);
-                    RenderFilters(head);
+                    if (_pick.Value is null)
+                    {
+                        RenderSpeciesToggle(head, compact: false);
+                        RenderFilters(head);
+                    }
                 });
             }
 
@@ -246,7 +275,11 @@ public partial class BerryfinderApp
             {
                 scroll.Column(["p-4 gap-3"], content: body =>
                 {
-                    if (_stand.Value is { } stand && _selectedAreaId.Value is null)
+                    if (_pick.Value is not null)
+                    {
+                        RenderAnalysisSheet(body);
+                    }
+                    else if (_stand.Value is { } stand && _selectedAreaId.Value is null)
                     {
                         RenderStandDetail(body, stand);
                     }
@@ -256,6 +289,7 @@ public partial class BerryfinderApp
                     }
                     else
                     {
+                        RenderAnalysisIntro(body);
                         if (mobile)
                         {
                             RenderFilters(body);
@@ -343,7 +377,7 @@ public partial class BerryfinderApp
                     {
                         c.Row(["items-center gap-2 flex-wrap"], content: r =>
                         {
-                            r.Badge(SuitabilityLabel(area.Suitability), tone: area.Suitability == "high" ? SemanticTone.Success : SemanticTone.Info, size: BadgeSize.Sm);
+                            r.Badge(AreaLabel(area), tone: area.Suitability == "high" && area.PredictionKind != ModelGate.Kind ? SemanticTone.Success : SemanticTone.Info, size: BadgeSize.Sm);
                             if (area.Restriction is not null)
                             {
                                 r.Badge(T("Protected", "Suojeltu"), tone: SemanticTone.Warning, size: BadgeSize.Sm);
@@ -372,11 +406,17 @@ public partial class BerryfinderApp
             "Arviot ovat epävarmoja eivätkä takaa satoa. Etäisyydet teille ovat linnuntietä."));
     }
 
+    // Plain words: no one needs the word "suitability" to decide where to walk
+    // Grid-model areas speak in the guide's odds, capped at "Worth a try" because their evidence is limited; stand areas keep their scale
+    private string AreaLabel(AreaSummary a) => a.PredictionKind == ModelGate.Kind
+        ? Guide.OddsLabel(Guide.OddsOf(a.Suitability, ModelGate.Evidence), _language.Value)
+        : SuitabilityLabel(a.Suitability);
+
     private string SuitabilityLabel(string suitability) => suitability switch
     {
-        "high" => T("High suitability", "Hyvä soveltuvuus"),
-        "moderate" => T("Moderate", "Kohtalainen"),
-        "low" => T("Low", "Heikko"),
+        "high" => T("Very promising", "Erittäin lupaava"),
+        "moderate" => T("Promising", "Lupaava"),
+        "low" => T("Not great", "Heikko"),
         "unlikely" => T("Unlikely", "Epätodennäköinen"),
         _ => T("Not assessed", "Ei arvioitu"),
     };
@@ -497,6 +537,11 @@ public partial class BerryfinderApp
         {
             var v = JsonSerializer.Deserialize<JsonElement>(json);
             _userLocation.Value = new UserLocation(v.GetProperty("lat").GetDouble(), v.GetProperty("lon").GetDouble(), v.GetProperty("accuracy").GetDouble());
+            if (_pick.Value is null && _locateRequest.Value > 0)
+            {
+                await SelectPointAsync(_userLocation.Value.Lat, _userLocation.Value.Lon);
+            }
+
             await RefreshAreasAsync();
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)

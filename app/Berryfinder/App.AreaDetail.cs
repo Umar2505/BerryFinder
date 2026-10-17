@@ -21,20 +21,22 @@ public partial class BerryfinderApp
         var d = _detail.Value;
         var a = d.Area;
         var trained = d.ModelKind != "heuristic";
+        var grid = d.Model;
 
         view.Column(["gap-2 motion-[0:opacity-0_translate-y-[6px],100:opacity-100_translate-y-0] motion-duration-200ms"], content: head =>
         {
             head.Row(["items-center gap-2 flex-wrap"], content: r =>
             {
                 r.Badge(SpeciesName(a.Species), tone: SemanticTone.Neutral, size: BadgeSize.Sm);
-                r.Badge(trained ? T("Trained model", "Koulutettu malli") : T("Unvalidated estimate", "Validoimaton arvio"),
-                    tone: trained ? SemanticTone.Success : SemanticTone.Warning, size: BadgeSize.Sm, outline: true);
+                r.Badge(grid is not null ? T("Machine-learning estimate", "Koneoppimisarvio") : trained ? T("Trained model", "Koulutettu malli") : T("Estimate from maps", "Arvio kartoista"),
+                    tone: trained && grid is null ? SemanticTone.Success : SemanticTone.Warning, size: BadgeSize.Sm, outline: true);
             });
-            head.Text([Text.H2, "font-heading leading-tight"], text: SuitabilityLabel(a.Suitability));
-            head.Text([Text.Small, "text-muted-foreground"], text: string.Format(Culture,
-                T("{0:0.#} ha of contiguous forest across {1} stands · {2:0.#} km from you or the map centre (straight line)",
-                  "{0:0.#} ha yhtenäistä metsää, {1} kuviota · {2:0.#} km sinusta tai kartan keskeltä (linnuntietä)"),
-                a.AreaHa, a.StandCount, a.DistanceKm));
+            head.Text([Text.H2, "font-heading leading-tight"], text: AreaLabel(a));
+            head.Text([Text.Small, "text-muted-foreground"], text: grid is not null
+                ? string.Format(Culture, T("{0:0.#} ha across {1} grid cells of 250 m · {2:0.#} km from you or the map centre (straight line)",
+                    "{0:0.#} ha, {1} ruutua (250 m) · {2:0.#} km sinusta tai kartan keskeltä (linnuntietä)"), a.AreaHa, grid.Cells, a.DistanceKm)
+                : string.Format(Culture, T("{0:0.#} ha of contiguous forest across {1} stands · {2:0.#} km from you or the map centre (straight line)",
+                    "{0:0.#} ha yhtenäistä metsää, {1} kuviota · {2:0.#} km sinusta tai kartan keskeltä (linnuntietä)"), a.AreaHa, a.StandCount, a.DistanceKm));
         });
 
         if (d.RestrictionSeverity is not null || a.Restriction is not null)
@@ -95,10 +97,16 @@ public partial class BerryfinderApp
         view.Column(["gap-2"], content: why =>
         {
             why.Text([Text.H4, "font-heading"], text: T("Why this area", "Miksi tämä alue"));
-            RenderDrivers(why, d.Drivers);
+            RenderDrivers(why, grid is not null ? GridDrivers(grid) : d.Drivers);
         });
 
         RenderSeasonCard(view, a.Species);
+
+        if (grid is not null)
+        {
+            RenderGridEvidence(view, d, grid);
+            return;
+        }
 
         view.Card([Card.Subtle], content: c =>
         {
@@ -160,6 +168,80 @@ public partial class BerryfinderApp
             "Tämä on arvio metsä-, maaperä- ja säätiedoista, ei maastotarkistus. Se ei takaa satoa."));
     }
 
+    // Plain reasons for a grid-model area, from what the model saw there
+    private IReadOnlyList<DriverSummary> GridDrivers(ModelAreaInfo m)
+    {
+        double? V(string key) => m.Habitat.TryGetValue(key, out var v) ? v : null;
+        var habitat = Guide.HabitatFromGrid(m.Habitat);
+        var list = new List<DriverSummary>
+        {
+            new("habitat", "positive", $"Habitat: {Guide.Describe(habitat, "en")}", $"Kasvupaikka: {Guide.Describe(habitat, "fi")}", 1),
+            new("index", "positive",
+                string.Format(CultureInfo.InvariantCulture, "Scores higher than {0:0} % of the Nordic places the model learned from", Math.Min(99, Math.Floor(m.MeanIndex))),
+                string.Format(CultureInfo.InvariantCulture, "Pisteet ylittävät {0:0} % mallin pohjoismaisista vertailupaikoista", Math.Min(99, Math.Floor(m.MeanIndex))), 1),
+        };
+
+        if (V("ph") is { } ph && V("soc") is { } soc)
+        {
+            list.Add(new("soil", "neutral",
+                string.Format(CultureInfo.InvariantCulture, "Soil pH about {0:0.0}, {1:0} g/kg organic carbon (SoilGrids, 250 m)", ph, soc),
+                string.Format(CultureInfo.InvariantCulture, "Maan pH noin {0:0.0}, orgaanista hiiltä {1:0} g/kg (SoilGrids, 250 m)", ph, soc), 1));
+        }
+
+        if (V("built_dist_m") is { } built)
+        {
+            list.Add(built >= 450
+                ? new("quiet", "positive", "No buildings or paved ground within 500 m", "Ei rakennuksia tai päällystettyä maata 500 metrin säteellä", 1)
+                : new("quiet", "neutral", string.Format(CultureInfo.InvariantCulture, "Built-up ground about {0:0} m away", built),
+                    string.Format(CultureInfo.InvariantCulture, "Rakennettua maata noin {0:0} metrin päässä", built), 1));
+        }
+
+        list.Add(m.Uncertainty <= 0.25
+            ? new("agreement", "positive", "The model's five versions agree closely here", "Mallin viisi versiota ovat tästä hyvin yksimielisiä", 1)
+            : new("agreement", "negative", "The model's five versions disagree here: treat it as a rougher guess", "Mallin viisi versiota ovat tästä eri mieltä: pidä arviota karkeampana", 1));
+        return list;
+    }
+
+    private void RenderGridEvidence(UIView view, AreaDetail d, ModelAreaInfo m)
+    {
+        double? V(string key) => m.Habitat.TryGetValue(key, out var v) ? v : null;
+        string Pct(double? v) => v is { } x ? x.ToString("P0", Culture) : T("Not mapped", "Ei kartoitettu");
+
+        view.Card([Card.Subtle], content: c =>
+        {
+            c.Text([Text.Label], text: T("What the model saw", "Mitä malli näki"));
+            Fact(c, T("Tree cover (ESA WorldCover)", "Puusto (ESA WorldCover)"), Pct(V("lc_tree")));
+            Fact(c, T("Wetland (ESA WorldCover)", "Kosteikko (ESA WorldCover)"), Pct(V("lc_wetland")));
+            Fact(c, T("Grass and shrub (ESA WorldCover)", "Ruoho ja pensaikko (ESA WorldCover)"), Pct((V("lc_grass") ?? 0) + (V("lc_shrub") ?? 0)));
+            Fact(c, T("On mire by Finnish stand data", "Suolla metsäkeskuksen tietojen mukaan"), Pct(V("mire")));
+            Fact(c, T("Soil pH (SoilGrids)", "Maan pH (SoilGrids)"), V("ph") is { } ph ? ph.ToString("0.0", Culture) : T("Not mapped", "Ei kartoitettu"));
+            Fact(c, T("Sand (SoilGrids)", "Hiekka (SoilGrids)"), V("sand") is { } sand ? (sand / 100).ToString("P0", Culture) : T("Not mapped", "Ei kartoitettu"));
+            if (V("fi_prop_pine") is { } pine && V("fi_prop_spruce") is { } spruce)
+            {
+                Fact(c, T("Tree species (Finnish stand data)", "Puulajit (metsäkeskus)"),
+                    string.Format(Culture, T("Pine {0:P0} · Spruce {1:P0}", "Mänty {0:P0} · Kuusi {1:P0}"), pine, spruce));
+            }
+        });
+
+        view.Card([Card.Subtle], content: c =>
+        {
+            c.Text([Text.Label], text: T("How sure is this?", "Kuinka varma tämä on?"));
+            Fact(c, T("Prediction", "Ennuste"), T("Machine-learning model (5 neural networks)", "Koneoppimismalli (5 neuroverkkoa)"));
+            Fact(c, T("Model version", "Malliversio"), d.ModelVersion);
+            Fact(c, T("Taught with", "Opetusaineisto"), m.LabelMode == "rules" ? T("Written habitat rules, not field data", "Kirjatut kasvupaikkasäännöt, ei maastotietoa") : T("Public sightings (GBIF)", "Julkiset havainnot (GBIF)"));
+            if (m.GbifAuc is { } auc)
+            {
+                Fact(c, T("Agreement with real sightings", "Osuvuus todellisiin havaintoihin"), string.Format(Culture, T("{0:0.00} (0.5 = chance, 1 = perfect)", "{0:0.00} (0,5 = sattuma, 1 = täydellinen)"), auc));
+            }
+
+            Fact(c, T("Published", "Julkaistu"), d.PublishedAt.ToString("d", Culture));
+            Fact(c, T("Evidence quality", "Näytön laatu"), T("Limited: not yet checked in the field", "Rajallinen: ei vielä tarkistettu maastossa"));
+        });
+
+        view.Text([Text.Caption, "text-muted-foreground"], text: T("A machine-learning estimate from climate, soil and satellite maps at 250 m, checked only against public sightings. It has not been checked in the field and cannot guarantee any harvest.",
+            "Koneoppimisarvio ilmasto-, maaperä- ja satelliittikartoista 250 metrin tarkkuudella, tarkistettu vain julkisia havaintoja vasten. Sitä ei ole tarkistettu maastossa, eikä se takaa satoa."));
+    }
+
     private string EvidenceLabel(string evidence) => evidence switch
     {
         "good" => T("Good: recent, complete records", "Hyvä: tuoreet, kattavat tiedot"),
@@ -203,8 +285,9 @@ public partial class BerryfinderApp
             }
 
             var e = season.Estimate;
-            c.Text([Text.H4, "font-heading"], text: StageLabel(e.Stage));
-            c.Text([Text.Small], text: AvailabilityLabel(e.Availability));
+            var calendarOnly = e.Source == "calendar" && e.Availability == "unknown";
+            c.Text([Text.H4, "font-heading"], text: calendarOnly ? T("In its usual season", "Tavallisella sesonkiajallaan") : StageLabel(e.Stage));
+            c.Text([Text.Small], text: calendarOnly ? T("This year's stage is not estimated for this berry.", "Tämän vuoden vaihetta ei arvioida tälle marjalle.") : AvailabilityLabel(e.Availability));
 
             foreach (var note in e.Notes)
             {
@@ -228,6 +311,13 @@ public partial class BerryfinderApp
                     T("Based on NASA POWER's modelled weather grid (about 55 km cells, observations to {0:d}); {1:0} growing degree days since April. A model of the area, not a measurement.",
                       "Perustuu NASA POWERin mallinnettuun säähän (noin 55 km ruudut, havainnot {0:d} asti); {1:0} kasvuastepäivää huhtikuusta. Alueen malli, ei mittaus."),
                     e.AsOf, modelledGdd));
+            }
+            else if (e.Source == "calendar" && BerryCatalog.TryGet(species, out var berry))
+            {
+                c.Text([Text.Caption, "text-muted-foreground mt-2"], text: string.Format(Culture,
+                    T("Typical season in northern Finland: {0}. There is no weather-based season model for this berry yet.",
+                      "Tavallinen sesonki Pohjois-Suomessa: {0}. Tälle marjalle ei vielä ole säähän perustuvaa kausimallia."),
+                    BerryCatalog.SeasonText(berry, _language.Value)));
             }
             else
             {
@@ -294,7 +384,7 @@ public partial class BerryfinderApp
             return;
         }
 
-        var label = string.Format(Culture, T("{0} · {1} · {2:0.#} ha", "{0} · {1} · {2:0.#} ha"), SpeciesName(detail.Area.Species), SuitabilityLabel(detail.Area.Suitability), detail.Area.AreaHa);
+        var label = string.Format(Culture, T("{0} · {1} · {2:0.#} ha", "{0} · {1} · {2:0.#} ha"), SpeciesName(detail.Area.Species), AreaLabel(detail.Area), detail.Area.AreaHa);
         var target = detail.Area.AccessLat is { } lat && detail.Area.AccessLon is { } lon ? (lat, lon) : (detail.Area.Lat, detail.Area.Lon);
         await _queries.AddFavoriteAsync(userId, label, detail.Area.Species, detail.Area.Id, target.Item1, target.Item2, null);
         await LoadSavedAsync();

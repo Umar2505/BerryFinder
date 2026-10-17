@@ -58,7 +58,7 @@ public partial class BerryfinderApp
     [HttpGet("/tiles/{species}/{z}/{x}/{y}", Auth = EndpointAuth.Public, AllowAnyOrigin = true)]
     public async Task<HttpResult> GetTile(string species, int z, int x, int y)
     {
-        if (!Species.Supported.Contains(species) || z is < 7 or > 16 || x < 0 || y < 0 || x >= 1 << z || y >= 1 << z)
+        if (!HasSpots(species) || z is < 7 or > 16 || x < 0 || y < 0 || x >= 1 << z || y >= 1 << z)
         {
             return HttpResult.NotFound("No such tile");
         }
@@ -108,7 +108,7 @@ public partial class BerryfinderApp
         if (RateLimited(request, 60)) return HttpResult.Json(new { error = "Too many requests" }, 429).WithHeader("Retry-After", "60");
 
         var species = QS(request, "species") ?? Species.Bilberry;
-        if (!Species.Supported.Contains(species) || Q(request, "lat") is not { } lat || Q(request, "lon") is not { } lon || lat is < 59 or > 71 || lon is < 19 or > 32)
+        if (!HasSpots(species) || Q(request, "lat") is not { } lat || Q(request, "lon") is not { } lon || lat is < 59 or > 71 || lon is < 19 or > 32)
         {
             return HttpResult.BadRequest("species, lat and lon (inside Finland) are required");
         }
@@ -134,7 +134,7 @@ public partial class BerryfinderApp
         var species = QS(request, "species") ?? Species.Bilberry;
         var bbox = (QS(request, "bbox") ?? "").Split(',').Select(s => double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : double.NaN).ToArray();
 
-        if (!Species.Supported.Contains(species) || bbox.Length != 4 || bbox.Any(double.IsNaN) || bbox[2] <= bbox[0] || bbox[3] <= bbox[1] || bbox[2] - bbox[0] > 1 || bbox[3] - bbox[1] > 0.5)
+        if (!HasSpots(species) || bbox.Length != 4 || bbox.Any(double.IsNaN) || bbox[2] <= bbox[0] || bbox[3] <= bbox[1] || bbox[2] - bbox[0] > 1 || bbox[3] - bbox[1] > 0.5)
         {
             return HttpResult.BadRequest("species and bbox=west,south,east,north (at most 1° by 0.5°) are required");
         }
@@ -156,7 +156,7 @@ public partial class BerryfinderApp
     public async Task<HttpResult> GetForecast(Ikon.App.HttpRequest request)
     {
         var species = QS(request, "species") ?? Species.Bilberry;
-        if (!Species.Supported.Contains(species)) return HttpResult.BadRequest("Unknown species");
+        if (!BerryCatalog.TryGet(species, out _)) return HttpResult.BadRequest("Unknown species");
 
         var lat = Q(request, "lat") ?? 65.01;
         var lon = Q(request, "lon") ?? 25.47;
@@ -167,7 +167,7 @@ public partial class BerryfinderApp
         {
             species, date = today, kind = "heuristic", model = Phenology.Version, estimate.Stage, estimate.Availability, estimate.Gdd, estimate.Notes, estimate.Basis,
             station = weather is null ? null : new { weather.Fmisid, weather.Name, distanceKm = Math.Round(weather.DistanceKm, 1), lastObservation = estimate.AsOf },
-            note = "Seasonal window from station weather; not a yield forecast",
+            note = estimate.Source == "calendar" ? "Typical calendar window only; no weather-based season model for this berry yet" : "Seasonal window from station weather; not a yield forecast",
         });
     }
 
@@ -175,7 +175,7 @@ public partial class BerryfinderApp
     public async Task<HttpResult> PlanTrip(TripRequest request)
     {
         if (ProvenUser.Current is not { } userId) return HttpResult.Unauthorized();
-        if (!Species.Supported.Contains(request.Species)) return HttpResult.BadRequest("Unknown species");
+        if (!HasSpots(request.Species)) return HttpResult.BadRequest("Unknown species");
         var plan = await PlanTripCoreAsync(userId, request);
         return HttpResult.Ok(plan);
     }
@@ -205,6 +205,33 @@ public partial class BerryfinderApp
         if (count >= Plans.Free.SavedLimit && !await HasPremiumAsync(userId)) return HttpResult.Forbidden($"The free plan keeps up to {Plans.Free.SavedLimit} saved places");
         var id = await _queries.AddFavoriteAsync(userId, request.Label.Trim(), request.Species, request.AreaId, request.Lat, request.Lon, request.Notes);
         return HttpResult.Created(new { id });
+    }
+
+    // The same saved places under the /api/v1 contract of the BerryFinder API (the inference service serves the rest of it)
+    [HttpGet("/api/v1/users/me/saved-locations", Auth = EndpointAuth.User)]
+    public Task<HttpResult> GetSavedLocations() => GetFavorites();
+
+    [HttpPost("/api/v1/users/me/saved-locations", Auth = EndpointAuth.User)]
+    public Task<HttpResult> PostSavedLocation(FavoriteRequest request) => AddFavorite(request);
+
+    // An analysis' cells and pins as GeoJSON for the map, passed through from the inference service. Job ids are random
+    // 128-bit values, and a result holds model output for a map area, nothing about the person who asked.
+    [HttpGet("/analysis/{jobId}", Auth = EndpointAuth.Public, AllowAnyOrigin = true)]
+    public async Task<HttpResult> GetAnalysisGeo(string jobId)
+    {
+        if (_inference is null) return HttpResult.Json(new { error = "Analysis is not configured" }, 503);
+        if (jobId.Length != 32 || !jobId.All(char.IsAsciiLetterOrDigit)) return HttpResult.NotFound("No such analysis");
+        try
+        {
+            var json = await _inference.GeoJsonAsync(jobId);
+            return json is null
+                ? HttpResult.NotFound("No such analysis")
+                : HttpResult.Bytes(System.Text.Encoding.UTF8.GetBytes(json), "application/json").WithHeader("Cache-Control", "private, max-age=3600");
+        }
+        catch (Exception ex) when (ex is InferenceUnavailableException or InferenceRequestException)
+        {
+            return HttpResult.Json(new { error = "Analysis service unavailable" }, 503);
+        }
     }
 
     [HttpPost("/observations", Auth = EndpointAuth.User)]
@@ -256,6 +283,63 @@ public partial class BerryfinderApp
         await using var db = await OpenDbAsync();
         return HttpResult.Ok(await db.QueryAsync("SELECT id, species, layer, kind, version, status, metrics, training_rows, created_at, promoted_at FROM model_versions ORDER BY created_at DESC LIMIT 100"));
     }
+
+    // "Where should I go today?": at most three plain recommendations for a location, in the requested language
+    [HttpGet("/guide", Auth = EndpointAuth.Public, AllowAnyOrigin = true)]
+    public async Task<HttpResult> GetGuide(Ikon.App.HttpRequest request)
+    {
+        if (RateLimited(request, 30)) return HttpResult.Json(new { error = "Too many requests" }, 429).WithHeader("Retry-After", "60");
+        if (Q(request, "lat") is not { } lat || Q(request, "lon") is not { } lon || lat is < 59 or > 71 || lon is < 19 or > 32)
+        {
+            return HttpResult.BadRequest("lat and lon (inside Finland) are required");
+        }
+
+        var lang = QS(request, "lang") == "fi" ? "fi" : "en";
+        // Optional date (within a year of today) to preview another time of year
+        var day = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (QS(request, "date") is { } dateText && DateOnly.TryParseExact(dateText, "yyyy-MM-dd", out var requested) && Math.Abs(requested.DayNumber - day.DayNumber) <= 366)
+        {
+            day = requested;
+        }
+
+        var result = await _guideSvc.GetAsync(lat, lon, day);
+        return HttpResult.Ok(new
+        {
+            state = result.State,
+            date = result.Date,
+            hero = result.Hero is null ? null : PickJson(result.Hero, lang),
+            alternatives = result.Alternatives.Select(p => PickJson(p, lang)),
+            inSeason = result.InSeason.Select(id => BerryJson(BerryCatalog.Get(id), lang)),
+            next = result.NextSpecies is null ? null : new { berry = BerryCatalog.Get(result.NextSpecies).Name(lang), days = result.DaysUntilNext },
+            note = Disclaimer(),
+        });
+    }
+
+    // "What do they look like?": the berry cards
+    [HttpGet("/berries", Auth = EndpointAuth.Public, AllowAnyOrigin = true)]
+    public object GetBerries(Ikon.App.HttpRequest request)
+    {
+        var lang = QS(request, "lang") == "fi" ? "fi" : "en";
+        return BerryCatalog.All.Select(b => BerryJson(b, lang));
+    }
+
+    private static object PickJson(GuidePick p, string lang)
+    {
+        var berry = BerryCatalog.Get(p.Species);
+        return new
+        {
+            areaId = p.AreaId, species = p.Species, berry = berry.Name(lang), color = berry.Color, art = berry.Art, place = p.Place,
+            drive = Guide.DriveText(p.DriveMinutes, lang), driveMinutes = p.DriveMinutes, walk = Guide.WalkText(p.DistRoadM, lang),
+            odds = Guide.OddsLabel((Odds)p.Odds, lang), oddsLevel = p.Odds, habitat = Guide.Describe(p.Habitat, lang),
+            stage = Guide.StageText(p.Availability, lang), navigate = Router.NavigationUrl(p.NavLat, p.NavLon), source = p.Source,
+        };
+    }
+
+    private object BerryJson(BerryInfo b, string lang) => new
+    {
+        id = b.Id, name = b.Name(lang), plural = b.Plural(lang), latin = b.Latin, color = b.Color, art = b.Art, season = BerryCatalog.SeasonText(b, lang),
+        look = b.Look(lang), where = b.Where(lang), tip = b.Tip(lang), hasSpots = HasSpots(b.Id),
+    };
 
     private string Disclaimer() =>
         "Estimates are uncertain and cannot guarantee any harvest. Check access rules on site; everyman's rights do not apply in every protected area or private yard.";

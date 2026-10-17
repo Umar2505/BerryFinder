@@ -1,0 +1,127 @@
+{
+  "version": "nordic-gbif-1.0",
+  "run": "Kaggle notebook umarrustamov/nordic-berry-habitat-model, version 359145676 (CPU, 10 h 3 min, completed)",
+  "trained_on": "2026-10-17",
+  "label_mode": "gbif",
+  "labels": "Real GBIF presence records (3,000 cells per berry, 2,473 sea buckthorn) against a target-group background of 16,090 vascular-plant record cells",
+  "output": "Relative habitat suitability: the share of the model's Nordic background places that score lower (0-100). Not a probability of finding berries.",
+  "features": {
+    "climate": "NASA POWER climatology (about 55 km cells): monthly mean and minimum temperature, rain, root-zone wetness, sunshine",
+    "soil": "ISRIC SoilGrids 2.0 at 250 m, 5-15 cm: pH, organic carbon, nitrogen, sand, clay",
+    "land_cover": "ESA WorldCover 2021 at 10 m (from Sentinel-1 and Sentinel-2), class shares around the point",
+    "elevation": "Copernicus DEM 90 m via Open-Meteo",
+    "finnish_forest": "Finnish Forest Centre open stand data (Finland only): site type, tree species shares, age, height, volume"
+  },
+  "permutation_importance_auc_drop": {
+    "climate": 0.156,
+    "soil": 0.038,
+    "land_cover": 0.017,
+    "elevation": 0.011,
+    "finnish_forest": -0.006
+  },
+  "local_scale_note": "Climate drives most of the skill but is uniform within about 55 km, so differences inside one search area come from soil, land cover, elevation and forest data only.",
+  "model_file": "models/nordic-gbif-1.0/berry_model.pt",
+  "model_sha256": "fc27f53f6ad1e373268031f62bc389cdff8e07382f832251af7c0fe38ca7190c",
+  "grid_file": "ml/oulu_grid_gbif.csv.gz",
+  "grid_step_m": 250,
+  "training_rows": 23400,
+  "validation_auc_members": [
+    0.725,
+    0.733,
+    0.729,
+    0.727,
+    0.732
+  ],
+  "species": {
+    "bilberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.661,
+      "gbif_boyce": 0.7,
+      "gbif_recall_top20": 0.444,
+      "gbif_presences": 473,
+      "gradient_boosting_auc": 0.687
+    },
+    "lingonberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.668,
+      "gbif_boyce": 0.933,
+      "gbif_recall_top20": 0.4,
+      "gbif_presences": 553,
+      "gradient_boosting_auc": 0.671
+    },
+    "cloudberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.785,
+      "gbif_boyce": 0.919,
+      "gbif_recall_top20": 0.608,
+      "gbif_presences": 390,
+      "gradient_boosting_auc": 0.784
+    },
+    "raspberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.689,
+      "gbif_boyce": 0.65,
+      "gbif_recall_top20": 0.519,
+      "gbif_presences": 503,
+      "gradient_boosting_auc": 0.699
+    },
+    "bog_bilberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.738,
+      "gbif_boyce": 0.927,
+      "gbif_recall_top20": 0.532,
+      "gbif_presences": 425,
+      "gradient_boosting_auc": 0.719
+    },
+    "cranberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.702,
+      "gbif_boyce": 0.885,
+      "gbif_recall_top20": 0.469,
+      "gbif_presences": 422,
+      "gradient_boosting_auc": 0.724
+    },
+    "crowberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.759,
+      "gbif_boyce": 0.9,
+      "gbif_recall_top20": 0.577,
+      "gbif_presences": 456,
+      "gradient_boosting_auc": 0.758
+    },
+    "wild_strawberry": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.629,
+      "gbif_boyce": 0.95,
+      "gbif_recall_top20": 0.349,
+      "gbif_presences": 347,
+      "gradient_boosting_auc": 0.632
+    },
+    "arctic_bramble": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.769,
+      "gbif_boyce": 0.865,
+      "gbif_recall_top20": 0.557,
+      "gbif_presences": 298,
+      "gradient_boosting_auc": 0.794
+    },
+    "sea_buckthorn": {
+      "rules_auc": null,
+      "rules_boyce": null,
+      "gbif_auc": 0.893,
+      "gbif_boyce": 0.915,
+      "gbif_recall_top20": 0.884,
+      "gbif_presences": 502,
+      "gradient_boosting_auc": 0.89
+    }
+  }
+}

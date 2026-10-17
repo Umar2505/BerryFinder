@@ -107,6 +107,16 @@ public class SoilClassifierTests
 
 public class PhenologyTests
 {
+    [Fact]
+    public void Berries_without_a_degree_day_model_get_the_calendar_window_and_say_so()
+    {
+        var inside = Phenology.Estimate("cloudberry", new DateOnly(2026, 7, 25), [], null);
+        Assert.Equal(("unknown", "calendar"), (inside.Availability, inside.Source));
+
+        Assert.Equal("not_yet", Phenology.Estimate("cranberry", new DateOnly(2026, 6, 1), [], null).Availability);
+        Assert.Equal("over", Phenology.Estimate("cloudberry", new DateOnly(2026, 10, 17), [], null).Availability);
+    }
+
     private static List<Phenology.DailyWeather> Season(int year, double meanTemp, DateOnly last, double minTemp = 3)
     {
         var days = new List<Phenology.DailyWeather>();

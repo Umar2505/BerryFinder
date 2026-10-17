@@ -158,7 +158,7 @@ public partial class BerryfinderApp
 
     private async Task OpenSavedOnMapAsync(SavedLocation place)
     {
-        if (place.Species is { } species && Species.Supported.Contains(species))
+        if (place.Species is { } species && HasSpots(species))
         {
             _species.Value = species;
         }
@@ -308,7 +308,7 @@ public partial class BerryfinderApp
                         r.Box(["w-9 h-9 shrink-0 rounded-full bg-[#1d3b2a] text-[#f5f1e6] flex items-center justify-center text-sm font-semibold"], content: b => b.Text(text: number.ToString(Culture)));
                         r.Column(["gap-0.5 flex-1"], content: t =>
                         {
-                            t.Text([Text.BodyStrong], text: $"{SuitabilityLabel(c.Area.Suitability)} · {c.Area.AreaHa:0.#} ha");
+                            t.Text([Text.BodyStrong], text: $"{AreaLabel(c.Area)} · {c.Area.AreaHa:0.#} ha");
                             t.Text([Text.Small, "text-muted-foreground"], text: c.DriveMinutes is { } m
                                 ? string.Format(Culture, T("{0:0} min drive ({1:0.#} km by road) each way", "{0:0} min ajoa ({1:0.#} km tietä pitkin) yhteen suuntaan"), m, c.DriveKm)
                                 : T("Driving time unavailable", "Ajoaika ei saatavilla"));

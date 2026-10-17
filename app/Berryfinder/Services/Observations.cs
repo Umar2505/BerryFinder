@@ -27,7 +27,7 @@ public sealed class ObservationService(OpenDb openDb)
 
     public static string? Validate(ObservationInput o, DateOnly today)
     {
-        if (!Species.Supported.Contains(o.Species)) return "Choose bilberry or lingonberry";
+        if (!BerryCatalog.TryGet(o.Species, out _)) return "Choose which berry you looked for";
         if (!Methods.Contains(o.Method)) return "Unknown survey method";
         if (!Outcomes.Contains(o.Outcome)) return "Choose what you found";
         if (o.Stage is not null && !Stages.Contains(o.Stage)) return "Unknown ripeness stage";

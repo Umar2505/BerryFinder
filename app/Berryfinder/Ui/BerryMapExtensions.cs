@@ -8,6 +8,9 @@ public sealed record UserLocation(double Lat, double Lon, double Accuracy);
 
 public sealed record LatLon(double Lat, double Lon);
 
+// A model analysis on the map: the chosen point and radius, and once finished the URL of its cells and pins (GeoJSON)
+public sealed record MapAnalysis(LatLon? Pick, int RadiusM, string? ResultUrl, string Mode, string? Species, string? Color, string? SelectedPinId, bool Running, int FitKey);
+
 // C# side of the MapLibre map in frontend-node/src/lib/berry-map. Events come back as JSON strings.
 public static class BerryMapExtensions
 {
@@ -29,6 +32,11 @@ public static class BerryMapExtensions
         bool pickMode = false,
         LatLon? pickedPoint = null,
         string? coverage = null,
+        string? color = null,
+        MapAnalysis? analysis = null,
+        int locateRequest = 0,
+        Func<string, Task>? onMapClick = null,
+        Func<string, Task>? onSelectPin = null,
         Func<string, Task>? onViewChange = null,
         Func<string, Task>? onSelectArea = null,
         Func<string, Task>? onSelectStand = null,
@@ -57,12 +65,17 @@ public static class BerryMapExtensions
             ["pickMode"] = pickMode,
             ["pickedPoint"] = pickedPoint,
             ["coverage"] = coverage,
+            ["color"] = color,
+            ["analysis"] = analysis,
+            ["locateRequest"] = locateRequest,
         };
 
         if (onViewChange is not null) props["onViewChangeId"] = view.CreateAction<string>(args => onViewChange(args.Value ?? ""));
         if (onSelectArea is not null) props["onSelectAreaId"] = view.CreateAction<string>(args => onSelectArea(args.Value ?? ""));
         if (onSelectStand is not null) props["onSelectStandId"] = view.CreateAction<string>(args => onSelectStand(args.Value ?? ""));
         if (onLocate is not null) props["onLocateId"] = view.CreateAction<string>(args => onLocate(args.Value ?? ""));
+        if (onMapClick is not null) props["onMapClickId"] = view.CreateAction<string>(args => onMapClick(args.Value ?? ""));
+        if (onSelectPin is not null) props["onSelectPinId"] = view.CreateAction<string>(args => onSelectPin(args.Value ?? ""));
         if (onPick is not null) props["onPickId"] = view.CreateAction<string>(args => onPick(args.Value ?? ""));
 
         view.AddNode(type: "berry-map", props: props, style: style, key: key, file: file, line: line);

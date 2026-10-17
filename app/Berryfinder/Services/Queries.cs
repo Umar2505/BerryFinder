@@ -18,7 +18,12 @@ public sealed record AreaDetail(
     IReadOnlyList<DriverSummary> Drivers,
     IReadOnlyList<Share> Evidence,
     string? RestrictionSeverity,
-    CommunitySummary? Community);
+    CommunitySummary? Community,
+    ModelAreaInfo? Model = null);
+
+// For areas published from the grid model: what the model saw there and how its run was checked
+public sealed record ModelAreaInfo(int Cells, double MeanIndex, double Uncertainty, IReadOnlyDictionary<string, double> Habitat,
+    double? GbifAuc, double? RulesAuc, string LabelMode);
 
 public sealed record CommunitySummary(int Reports, int Contributors, int Found, int NotFound, DateOnly? Latest);
 
@@ -111,9 +116,11 @@ public sealed class Queries(OpenDb openDb, PredictionPublisher publisher)
             return null;
         }
 
-        var meta = await db.QuerySingleAsync<(string Version, string Kind, DateTime PublishedAt, long ModelId)>("""
-            SELECT mv.version, mv.kind, a.published_at, mv.id FROM picking_areas a JOIN model_versions mv ON mv.id = a.model_version_id WHERE a.id = @id
+        var meta = await db.QuerySingleAsync<(string Version, string Kind, DateTime PublishedAt, long ModelId, string? Details, string Metrics, string Params)>("""
+            SELECT mv.version, mv.kind, a.published_at, mv.id, a.details::text, mv.metrics::text, mv.params::text
+            FROM picking_areas a JOIN model_versions mv ON mv.id = a.model_version_id WHERE a.id = @id
             """, new { id });
+        var model = meta.Details is { } details ? ModelInfo(details, meta.Metrics, meta.Params) : null;
 
         var stands = (await db.QueryAsync<StandAgg>("""
             SELECT s.stand_id AS StandId, ST_Area(s.geom) AS Area, s.mean_age AS MeanAge, s.basal_area AS BasalArea, s.mean_height AS MeanHeight,
@@ -168,7 +175,29 @@ public sealed class Queries(OpenDb openDb, PredictionPublisher publisher)
             drivers, Shares(s => s.Evidence),
             stands.Any(s => s.Severity == "exclude") ? "exclude" : stands.Any(s => s.Severity == "warn") ? "warn" : null,
             // Aggregated community reports are shown only when at least three people contributed, so no one's spot is exposed
-            community.Contributors >= 3 ? new CommunitySummary(community.Reports, community.Contributors, community.Found, community.NotFound, community.Latest) : null);
+            community.Contributors >= 3 ? new CommunitySummary(community.Reports, community.Contributors, community.Found, community.NotFound, community.Latest) : null,
+            model);
+    }
+
+    private static ModelAreaInfo ModelInfo(string details, string metrics, string parameters)
+    {
+        using var d = JsonDocument.Parse(details);
+        using var m = JsonDocument.Parse(metrics);
+        using var p = JsonDocument.Parse(parameters);
+        static double? Num(JsonElement e, string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : null;
+
+        var habitat = new Dictionary<string, double>();
+        if (d.RootElement.TryGetProperty("habitat", out var h) && h.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var kv in h.EnumerateObject().Where(kv => kv.Value.ValueKind == JsonValueKind.Number))
+            {
+                habitat[kv.Name] = kv.Value.GetDouble();
+            }
+        }
+
+        return new ModelAreaInfo((int)(Num(d.RootElement, "cells") ?? 0), Num(d.RootElement, "mean_index") ?? 0, Num(d.RootElement, "uncertainty") ?? 0, habitat,
+            Num(m.RootElement, "GbifAuc"), Num(m.RootElement, "RulesAuc"),
+            p.RootElement.TryGetProperty("label_mode", out var lm) ? lm.GetString() ?? "" : "");
     }
 
     public async Task<long?> AreaAtAsync(string species, double lat, double lon)

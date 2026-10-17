@@ -1,0 +1,18 @@
+# The model's own runtime (same libraries the training notebook used)
+torch==2.6.0
+numpy==2.2.1
+pandas==2.2.3
+pyarrow==18.1.0
+scipy==1.14.1
+scikit-learn==1.6.0
+matplotlib==3.10.0
+rasterio==1.4.3
+pyproj==3.7.0
+requests==2.32.3
+# The service
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.4
+# Tests
+pytest==8.3.4
+httpx==0.28.1

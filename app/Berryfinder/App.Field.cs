@@ -102,14 +102,14 @@ public partial class BerryfinderApp
                 f.Column(["gap-2"], content: s =>
                 {
                     s.Text([Text.Label], text: T("1. Which berry?", "1. Mikä marja?"));
-                    s.ToggleGroupSingle(["grid grid-cols-2 gap-2"], value: _obsSpecies.Value, ariaLabel: T("Berry", "Marja"),
-                        onValueChange: async v => { if (Species.Supported.Contains(v)) _obsSpecies.Value = v; },
+                    s.ToggleGroupSingle(["grid grid-cols-2 sm:grid-cols-3 gap-2"], value: _obsSpecies.Value, ariaLabel: T("Berry", "Marja"),
+                        onValueChange: async v => { if (BerryCatalog.TryGet(v, out _)) _obsSpecies.Value = v; },
                         content: g =>
                         {
-                            foreach (var sp in Species.Supported)
+                            foreach (var berry in BerryCatalog.All)
                             {
-                                g.ToggleGroupItem(["h-14 rounded-xl border border-secondary text-base data-[state=on]:bg-brand-solid data-[state=on]:text-[var(--text-brand-button)]"], value: sp,
-                                    content: i => i.Text(text: SpeciesName(sp)));
+                                g.ToggleGroupItem(["h-12 rounded-xl border border-secondary text-base data-[state=on]:bg-brand-solid data-[state=on]:text-[var(--text-brand-button)]"], value: berry.Id,
+                                    content: i => i.Text(text: SpeciesName(berry.Id)));
                             }
                         });
                 });

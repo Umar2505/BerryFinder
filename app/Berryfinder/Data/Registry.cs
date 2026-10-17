@@ -50,6 +50,12 @@ public static class Registry
             "Per record: only CC0 1.0 and CC BY 4.0 records are ingested", "GBIF.org occurrence download, per-dataset citation", "allowed_with_attribution", "active",
             "Pilot region",
             "Presence-only. Used for a sanity check of the baseline, never as absence, abundance or yield."),
+        new("nordic_habitat_model", "Nordic berry habitat model (PyTorch ensemble, 250 m grid)", "BerryFinder (notebooks/nordic_berry_habitat_model.ipynb)",
+            "data/ml/berry_model_card.json", "https://github.com/Umar2505/BerryFinder/tree/main/notebooks",
+            "Derived from CHELSA, SoilGrids, ESA WorldCover and Copernicus DEM (CC BY 4.0 or free use), Metsäkeskus (CC BY 4.0) and GBIF (CC0 / CC BY 4.0)",
+            "CHELSA; ISRIC SoilGrids; ESA WorldCover; Copernicus DEM GLO-30; Suomen metsäkeskus; GBIF.org", "allowed_with_attribution", "active",
+            "Oulu pilot square, scored offline at 250 m",
+            "Trained on written habitat rules (pseudo-labels), checked against real GBIF sightings. Only species that beat chance by a clear margin get spots; odds stay capped below 'Promising'."),
         new("luke_berry_monitoring", "Wild berry yield monitoring and forecasts", "Natural Resources Institute Finland (Luke)",
             "https://www.luke.fi/fi/luonnonvaratieto/tiedetta-ja-tietoa/luonnonmarjat/luonnonmarjojen-satoseurannat-ja-ennusteet", "https://marjahavainnot.fi/",
             "Not established", "—", "pending_authorization", "pending_authorization",
@@ -72,7 +78,15 @@ public static class Registry
     [
         new(Species.Bilberry, "Vaccinium myrtillus", "Bilberry", "Mustikka", true, 2882833, "Mesic heath forests; recovers slowly after clear-cutting"),
         new(Species.Lingonberry, "Vaccinium vitis-idaea", "Lingonberry", "Puolukka", true, 2882835, "Sub-xeric pine heaths; tolerates more open canopy"),
-        new(Species.Cloudberry, "Rubus chamaemorus", "Cloudberry", "Hilla", false, null,"Peatland species; needs a separate mire model (planned)"),
+        // Not Supported: no forest-stand baseline. Their spots, where shown, come from the Nordic grid model (data/ml)
+        new(Species.Cloudberry, "Rubus chamaemorus", "Cloudberry", "Hilla", false, 2998290, "Open mires; grid model only, no stand baseline"),
+        new("raspberry", "Rubus idaeus", "Raspberry", "Vadelma", false, 2993094, "Clearings and edges; grid model only"),
+        new("bog_bilberry", "Vaccinium uliginosum", "Bog bilberry", "Juolukka", false, 8073364, "Mires and fell heaths; grid model only"),
+        new("cranberry", "Vaccinium oxycoccos", "Cranberry", "Karpalo", false, 2882940, "Open bogs; grid model only"),
+        new("crowberry", "Empetrum nigrum", "Crowberry", "Variksenmarja", false, 8925249, "Dry heaths and bogs; grid model only"),
+        new("wild_strawberry", "Fragaria vesca", "Wild strawberry", "Metsämansikka", false, 3029817, "Sunny edges and meadows; grid model only"),
+        new("arctic_bramble", "Rubus arcticus", "Arctic bramble", "Mesimarja", false, 2992051, "Moist meadows and mire edges; grid model only"),
+        new("sea_buckthorn", "Hippophae rhamnoides", "Sea buckthorn", "Tyrni", false, 3039285, "Sandy sea shores; grid model only"),
     ];
 
     // Oulu pilot: 25 km x 25 km south-east of the city centre, in 5 km tiles (EPSG:3067)

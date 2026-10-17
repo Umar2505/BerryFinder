@@ -34,6 +34,11 @@ public static class Phenology
     // result says so, because a grid cell is a model of the area, not a reading from a weather station.
     public static Result Estimate(string species, DateOnly date, IReadOnlyList<DailyWeather> weather, double? normalJunJulPrecip, IReadOnlyList<DailyWeather>? grid = null)
     {
+        if (!Windows.ContainsKey(species))
+        {
+            return Calendar(species, date);
+        }
+
         var station = EstimateFrom(species, date, weather, normalJunJulPrecip);
         var wetness = RecentWetness(grid, date);
 
@@ -63,6 +68,25 @@ public static class Phenology
             RootWetness = wetness,
             Basis = "Growing degree days (base +5 °C) from the NASA POWER MERRA-2 model grid; heuristic thresholds, not yet calibrated with field data",
         };
+    }
+
+    // Berries without degree-day thresholds: only the typical calendar window (BerryCatalog). Inside it the stage stays unknown,
+    // because a calendar cannot say whether this year is early or late.
+    public static Result Calendar(string species, DateOnly date)
+    {
+        const string basis = "Typical calendar window for northern Finland; no weather-based season model for this berry yet";
+        if (!BerryCatalog.TryGet(species, out var berry))
+        {
+            return new Result("unknown", "unknown", null, null, [], "No season information for this species");
+        }
+
+        if (BerryCatalog.InSeason(berry, date))
+        {
+            return new Result("unknown", "unknown", null, null, [], basis, "calendar");
+        }
+
+        var notYet = date.Month * 100 + date.Day < berry.SeasonStart.Month * 100 + berry.SeasonStart.Day;
+        return new Result(notYet ? "before_flowering" : "dormant", notYet ? "not_yet" : "over", null, null, [], basis, "calendar");
     }
 
     private static double? RecentWetness(IReadOnlyList<DailyWeather>? grid, DateOnly date)

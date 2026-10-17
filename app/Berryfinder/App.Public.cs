@@ -137,6 +137,15 @@ public partial class BerryfinderApp
 
                     s.Card([Card.Default], content: c =>
                     {
+                        c.Text([Text.H4, "font-heading"], text: T("Layer A2: the Nordic machine-learning model", "Kerros A2: pohjoismainen koneoppimismalli"));
+                        c.Text([Text.Body], text: T("For berries without forest-stand rules (cloudberry, cranberry, bog bilberry, raspberry, arctic bramble, sea buckthorn), spots come from five neural networks trained across the Nordic countries on 1 km CHELSA climate, SoilGrids soil, ESA WorldCover land cover, the Copernicus elevation model and Finnish stand data. Each 250 m square around Oulu is scored, and we keep each berry's best tenth that also matches its basic habitat, such as a mire for cloudberry.",
+                            "Marjoille, joille ei ole metsäkuviosääntöjä (hilla, karpalo, juolukka, vadelma, mesimarja, tyrni), paikat tulevat viidestä neuroverkosta, jotka on koulutettu Pohjoismaissa 1 km CHELSA-ilmastolla, SoilGrids-maaperällä, ESA WorldCover -maanpeitteellä, Copernicus-korkeusmallilla ja metsäkeskuksen kuviotiedoilla. Jokainen 250 metrin ruutu Oulun ympärillä pisteytetään, ja kullekin marjalle pidetään paras kymmenes, joka sopii myös sen peruskasvupaikkaan, kuten suo hillalle."));
+                        c.Text([Text.Body, "mt-2"], text: T("The networks were taught with written habitat rules, not field data, and checked against real public sightings (GBIF). Only berries that beat chance there get spots, always marked \"Worth a try\" at most. Bilberry, crowberry and wild strawberry did not pass: bilberry keeps its forest-stand spots, the other two have none yet.",
+                            "Verkot opetettiin kirjatuilla kasvupaikkasäännöillä, ei maastotiedoilla, ja tarkistettiin todellisia julkisia havaintoja (GBIF) vasten. Vain sattumaa paremmin osuvat marjat saavat paikkoja, ja ne merkitään korkeintaan \"Kokeilemisen arvoinen\". Mustikka, variksenmarja ja metsämansikka eivät läpäisseet: mustikalla on yhä metsäkuvioihin perustuvat paikkansa, kahdella muulla ei vielä ole paikkoja."));
+                    });
+
+                    s.Card([Card.Default], content: c =>
+                    {
                         c.Text([Text.H4, "font-heading"], text: T("Layer B: this season", "Kerros B: tämä kausi"));
                         c.Text([Text.Body], text: T("Where the season stands comes from growing degree days accumulated from 1 April at the nearest Finnish Meteorological Institute station, with spring frost during flowering and dry summers flagged. If the station has gaps, NASA POWER's modelled grid fills in, and the result says so. It estimates the stage (flowering, unripe, ripe), never a yield.",
                             "Kauden vaihe perustuu kasvuastepäiviin, jotka kertyvät 1. huhtikuuta lähimmällä Ilmatieteen laitoksen asemalla; kukinnan aikaiset hallat ja kuivat kesät merkitään. Jos asemalla on aukkoja, NASA POWERin mallinnettu ruudukko täydentää ja tulos kertoo sen. Se arvioi vaiheen (kukinta, raaka, kypsä), ei satoa."));
@@ -162,7 +171,7 @@ public partial class BerryfinderApp
                         c.Text([Text.H4, "font-heading"], text: T("What we use, and what we don't claim", "Mitä käytämme ja mitä emme väitä"));
                         foreach (var line in new[]
                         {
-                            T("Finnish Forest Centre open stand data, GTK superficial deposits, FMI weather, Syke protected areas, OpenStreetMap roads, NASA POWER modelled weather, Copernicus Sentinel-2 scene catalogue.", "Metsäkeskuksen avoin kuviotieto, GTK:n pintamaalajit, Ilmatieteen laitoksen sää, Syken suojelualueet, OpenStreetMapin tiet, NASA POWERin mallinnettu sää, Copernicus Sentinel-2 -kuvaluettelo."),
+                            T("Finnish Forest Centre open stand data, GTK superficial deposits, FMI weather, Syke protected areas, OpenStreetMap roads, NASA POWER modelled weather, Copernicus Sentinel-2 scene catalogue; for the machine-learning model also CHELSA climate, ISRIC SoilGrids, ESA WorldCover, the Copernicus DEM and GBIF sightings.", "Metsäkeskuksen avoin kuviotieto, GTK:n pintamaalajit, Ilmatieteen laitoksen sää, Syken suojelualueet, OpenStreetMapin tiet, NASA POWERin mallinnettu sää, Copernicus Sentinel-2 -kuvaluettelo; koneoppimismallille myös CHELSA-ilmasto, ISRIC SoilGrids, ESA WorldCover, Copernicus-korkeusmalli ja GBIF-havainnot."),
                             T("Prediction cells are forest stands (typically 1 to 5 hectares). We can't see individual berries, and a good stand can still have a poor year.", "Ennustesolut ovat metsäkuvioita (tyypillisesti 1–5 hehtaaria). Emme näe yksittäisiä marjoja, ja hyvälläkin kuviolla voi olla huono vuosi."),
                             T("GTK's map has no measured pH, nutrients or moisture, so none are used. NASA's soil wetness is a coarse model grid, shown only as context.", "GTK:n kartassa ei ole mitattua pH:ta, ravinteita tai kosteutta, joten niitä ei käytetä. NASAn maankosteus on karkea mallitieto, näytetään vain taustana."),
                             T("We don't predict kilograms. That needs yield-calibrated field measurements, which the pilot collects.", "Emme ennusta kilogrammoja. Se vaatii satokalibroituja maastomittauksia, joita pilotti kerää."),
@@ -172,37 +181,6 @@ public partial class BerryfinderApp
                         }
                     });
                 });
-        });
-    }
-
-    private void RenderBerriesPage(UIView view)
-    {
-        RenderScrollPage(view, page =>
-        {
-            Section(page, T("Supported berries", "Tuetut marjat"), T("Two species at launch. Cloudberry is next, but it grows on mires and needs its own model.", "Kaksi lajia alussa. Hilla on seuraava, mutta se kasvaa soilla ja tarvitsee oman mallinsa."), s =>
-            {
-                foreach (var (sp, latin, en, fi, status) in new[]
-                {
-                    (Species.Bilberry, "Vaccinium myrtillus", "Mesic heath forests, mature and mid-aged spruce or mixed stands. Recovers slowly after clear-cutting. Season in Oulu: mid-July to mid-August.",
-                        "Tuoreet kankaat, kypsät ja keski-ikäiset kuusi- tai sekametsät. Toipuu hitaasti avohakkuusta. Sesonki Oulussa: heinäkuun puolivälistä elokuun puoliväliin.", "Supported"),
-                    (Species.Lingonberry, "Vaccinium vitis-idaea", "Dry to sub-xeric pine heaths with an open canopy; also fine after thinning. Season in Oulu: late August to October.",
-                        "Kuivat ja kuivahkot mäntykankaat avoimella latvustolla; sietää myös harvennuksen. Sesonki Oulussa: elokuun lopusta lokakuuhun.", "Supported"),
-                    (Species.Cloudberry, "Rubus chamaemorus", "Open bogs and wet mires. Needs peatland-specific data and a separate model, planned after the first season.",
-                        "Avosuot ja märät suot. Tarvitsee suokohtaista dataa ja oman mallin, suunniteltu ensimmäisen kauden jälkeen.", "Planned"),
-                })
-                {
-                    s.Card([Card.Default], content: c =>
-                    {
-                        c.Row(["items-center gap-2 flex-wrap"], content: r =>
-                        {
-                            r.Text([Text.H3, "font-heading"], text: SpeciesName(sp));
-                            r.Text([Text.Small, "italic text-muted-foreground"], text: latin);
-                            r.Badge(status == "Supported" ? T("Supported", "Tuettu") : T("Planned", "Suunnitteilla"), tone: status == "Supported" ? SemanticTone.Success : SemanticTone.Neutral, size: BadgeSize.Sm);
-                        });
-                        c.Text([Text.Body], text: T(en, fi));
-                    });
-                }
-            });
         });
     }
 

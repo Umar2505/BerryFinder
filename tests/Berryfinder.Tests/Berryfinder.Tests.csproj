@@ -19,6 +19,9 @@
     <Compile Include="..\..\app\Berryfinder\Ingestion\NasaPowerParser.cs" LinkBase="Ingestion" />
     <Compile Include="..\..\app\Berryfinder\Ingestion\FmiParser.cs" LinkBase="Ingestion" />
     <Compile Include="..\..\app\Berryfinder\Data\Migrations.cs" LinkBase="Data" />
+    <Compile Include="..\..\app\Berryfinder\Services\InferenceClient.cs" LinkBase="Services" />
     <Content Include="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The shipped model card and scored grid, so the app's parser is tested against what notebooks/predict_region.py really wrote -->
+    <Content Include="..\..\data\ml\*" Link="Fixtures\ml\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

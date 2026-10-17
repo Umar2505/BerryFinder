@@ -54,6 +54,73 @@ public static class Geocoder
     }
 }
 
+public static class ReverseGeocoder
+{
+    private static readonly ConcurrentDictionary<string, string> Cache = new();
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+    private static DateTime _last = DateTime.MinValue;
+
+    // A friendly name for a spot ("Kiiminki", "Haukipudas"): the nearest suburb, village or town. Null when none is found.
+    // Cached by ~1 km bucket because the public Nominatim service allows one request per second.
+    public static async Task<string?> NameAsync(double lat, double lon, CancellationToken ct = default)
+    {
+        var key = string.Create(CultureInfo.InvariantCulture, $"{lat:0.00}:{lon:0.00}");
+        if (Cache.TryGetValue(key, out var hit))
+        {
+            return hit;
+        }
+
+        await Gate.WaitAsync(ct);
+        try
+        {
+            if (Cache.TryGetValue(key, out hit))
+            {
+                return hit;
+            }
+
+            var wait = TimeSpan.FromSeconds(1.1) - (DateTime.UtcNow - _last);
+            if (wait > TimeSpan.Zero)
+            {
+                await Task.Delay(wait, ct);
+            }
+
+            _last = DateTime.UtcNow;
+            var url = string.Create(CultureInfo.InvariantCulture,
+                $"https://nominatim.openstreetmap.org/reverse?lat={lat:0.#####}&lon={lon:0.#####}&format=jsonv2&zoom=14&addressdetails=1&accept-language=fi,en");
+            var address = JsonNode.Parse(await Http.GetStringWithRetryAsync(url, ct, attempts: 2))?["address"];
+            string? name = null;
+            foreach (var field in new[] { "suburb", "village", "hamlet", "town", "city_district", "city", "municipality" })
+            {
+                if (address?[field]?.GetValue<string>() is { Length: > 0 } value)
+                {
+                    name = value;
+                    break;
+                }
+            }
+
+            if (name is not null)
+            {
+                if (Cache.Count > 5000)
+                {
+                    Cache.Clear();
+                }
+
+                Cache[key] = name;
+            }
+
+            return name;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or InvalidOperationException or FormatException)
+        {
+            return null;
+        }
+        finally
+        {
+            Gate.Release();
+        }
+    }
+}
+
 public sealed record DriveEstimate(double Minutes, double Kilometres);
 
 // Driving times on the road network from the OSRM routing engine (OpenStreetMap data). The public

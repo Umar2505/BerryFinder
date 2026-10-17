@@ -16,8 +16,9 @@ public static class JobKinds
     public const string Publish = "publish";
     public const string Pipeline = "pipeline";
     public const string Train = "train";
+    public const string ModelGrid = "model_grid";
 
-    public static readonly string[] All = [Pipeline, Stands, Soil, Access, Protected, Features, Weather, GridWeather, Scenes, Gbif, Publish];
+    public static readonly string[] All = [Pipeline, Stands, Soil, Access, Protected, Features, Weather, GridWeather, Scenes, Gbif, Publish, ModelGrid];
 
     public static string SourceOf(string kind) => kind switch
     {
@@ -30,6 +31,7 @@ public static class JobKinds
         Scenes => "copernicus_s2",
         Gbif => "gbif_occurrences",
         Train => "field_observations",
+        ModelGrid => "nordic_habitat_model",
         _ => "metsakeskus_stands",
     };
 }
@@ -39,7 +41,8 @@ public sealed record JobRow(long Id, string SourceId, string Kind, string Params
 
 // Runs ingestion and publishing jobs one at a time from the ingestion_jobs table. Jobs survive a
 // restart: an interrupted job goes back to the queue and per-tile timestamps let it skip finished work.
-public sealed class JobRunner(OpenDb openDb, Func<TimeSpan, string, Task<IAsyncDisposable>> holdBackgroundWork, PredictionPublisher publisher, TrainingService trainer)
+public sealed class JobRunner(OpenDb openDb, Func<TimeSpan, string, Task<IAsyncDisposable>> holdBackgroundWork, PredictionPublisher publisher, TrainingService trainer,
+    GridModelImporter gridModel)
 {
     public event Action? Changed;
 
@@ -166,6 +169,10 @@ public sealed class JobRunner(OpenDb openDb, Func<TimeSpan, string, Task<IAsyncD
 
                 case JobKinds.Train:
                     await trainer.TrainAllAsync(job.RequestedBy, progress, ct);
+                    break;
+
+                case JobKinds.ModelGrid:
+                    await gridModel.ImportAsync(progress, ct);
                     break;
 
                 default:

@@ -1,0 +1,100 @@
+{
+  "version": "nordic-ensemble-1.0",
+  "run": "Kaggle notebook umarrustamov/nordic-berry-habitat-model6c59f73292, version 359152479 (CPU, 81 min)",
+  "trained_on": "2026-10-17",
+  "label_mode": "rules",
+  "grid_file": "ml/oulu_grid.csv.gz",
+  "grid_step_m": 250,
+  "model_file": "models/nordic-rules-1.0/berry_model.pt",
+  "model_sha256": "03e2d41a454ffbc1c678e68734d009e1e2c94490c96408f4b7493cd40651c74c",
+  "training_rows": 24042,
+  "validation_auc_members": [
+    0.798,
+    0.801,
+    0.799,
+    0.797,
+    0.796
+  ],
+  "species": {
+    "bilberry": {
+      "rules_auc": 0.831,
+      "rules_boyce": 0.869,
+      "gbif_auc": 0.437,
+      "gbif_boyce": -0.498,
+      "gbif_recall_top20": 0.202,
+      "gbif_presences": 526
+    },
+    "lingonberry": {
+      "rules_auc": 0.823,
+      "rules_boyce": 0.884,
+      "gbif_auc": 0.567,
+      "gbif_boyce": 0.407,
+      "gbif_recall_top20": 0.338,
+      "gbif_presences": 600
+    },
+    "cloudberry": {
+      "rules_auc": 0.834,
+      "rules_boyce": 0.144,
+      "gbif_auc": 0.648,
+      "gbif_boyce": 0.948,
+      "gbif_recall_top20": 0.359,
+      "gbif_presences": 473
+    },
+    "raspberry": {
+      "rules_auc": 0.765,
+      "rules_boyce": 0.458,
+      "gbif_auc": 0.578,
+      "gbif_boyce": 0.759,
+      "gbif_recall_top20": 0.273,
+      "gbif_presences": 509
+    },
+    "bog_bilberry": {
+      "rules_auc": 0.851,
+      "rules_boyce": 0.184,
+      "gbif_auc": 0.607,
+      "gbif_boyce": 0.803,
+      "gbif_recall_top20": 0.278,
+      "gbif_presences": 457
+    },
+    "cranberry": {
+      "rules_auc": 0.853,
+      "rules_boyce": 0.404,
+      "gbif_auc": 0.553,
+      "gbif_boyce": 0.415,
+      "gbif_recall_top20": 0.244,
+      "gbif_presences": 422
+    },
+    "crowberry": {
+      "rules_auc": 0.838,
+      "rules_boyce": 0.429,
+      "gbif_auc": 0.488,
+      "gbif_boyce": -0.071,
+      "gbif_recall_top20": 0.142,
+      "gbif_presences": 493
+    },
+    "wild_strawberry": {
+      "rules_auc": 0.831,
+      "rules_boyce": 0.556,
+      "gbif_auc": 0.501,
+      "gbif_boyce": -0.019,
+      "gbif_recall_top20": 0.201,
+      "gbif_presences": 348
+    },
+    "arctic_bramble": {
+      "rules_auc": 0.797,
+      "rules_boyce": 0.198,
+      "gbif_auc": 0.716,
+      "gbif_boyce": 0.84,
+      "gbif_recall_top20": 0.534,
+      "gbif_presences": 324
+    },
+    "sea_buckthorn": {
+      "rules_auc": 0.745,
+      "rules_boyce": 0.146,
+      "gbif_auc": 0.776,
+      "gbif_boyce": 0.644,
+      "gbif_recall_top20": 0.674,
+      "gbif_presences": 503
+    }
+  }
+}
